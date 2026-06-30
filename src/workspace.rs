@@ -44,7 +44,7 @@ pub fn run() -> Result<()> {
             let estimated_time = 1.5 + (loc as f64 * 0.005) + (dep_count as f64 * 0.2);
 
             crate_metrics.push(CrateMetrics {
-                name: package.name.clone(),
+                name: package.name.to_string(),
                 loc,
                 dep_count,
                 estimated_time,

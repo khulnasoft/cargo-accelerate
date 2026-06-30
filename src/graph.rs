@@ -36,7 +36,7 @@ pub fn run() -> Result<()> {
         let dep_count = package.dependencies.len();
         let estimated_time = estimate_crate_cost(name, dep_count);
         all_crates.push(CrateNode {
-            name: name.clone(),
+            name: name.to_string(),
             loc: 0,
             dep_count,
             estimated_time,

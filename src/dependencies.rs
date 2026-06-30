@@ -75,7 +75,7 @@ pub fn run() -> Result<()> {
         let estimated_time = base_weight + (transitives.len() as f64 * 0.15);
 
         metrics.push(DepMetrics {
-            name: name.clone(),
+            name: name.to_string(),
             version: package.version.to_string(),
             transitive_count,
             estimated_time,
