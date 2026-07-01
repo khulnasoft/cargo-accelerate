@@ -561,9 +561,15 @@ fn build_trend_json(trend: &HashMap<String, Vec<(u64, u64)>>) -> String {
         let x_json = serde_json::to_string(&x_vals).unwrap_or_default();
         let y_json = serde_json::to_string(&y_vals).unwrap_or_default();
         let color = colors[i % colors.len()];
-        traces.push(format!(
-            r#"{{"type":"scatter","mode":"lines+markers","name":"{}","x":{},"y":{},"marker":{{"color":"{}"}},"line":{{"color":"{}"}}}}"#,
-            cmd, x_json, y_json, color, color
+        traces.push(serde_json::json!({
+            "type": "scatter",
+            "mode": "lines+markers",
+            "name": cmd,
+            "x": x_vals,
+            "y": y_vals,
+            "marker": { "color": color },
+            "line": { "color": color },
+        }).to_string());
         ));
     }
     format!(r#"{{"traces":[{}]}}"#, traces.join(","))
