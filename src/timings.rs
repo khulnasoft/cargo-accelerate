@@ -46,6 +46,7 @@ impl TimingStore {
     }
 
     pub fn record(&mut self, run: BuildRun) {
+        self.next_id = self.next_id.max(run.id.saturating_add(1));
         self.runs.push(run);
     }
 
