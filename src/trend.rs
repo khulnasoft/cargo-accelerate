@@ -1,3 +1,4 @@
+use crate::timings::{self, TimingStore};
 use crate::utils::get_project_root;
 use anyhow::{Context, Result};
 use colored::*;
@@ -87,19 +88,25 @@ pub fn run() -> Result<()> {
     let trend_dir = root.join(".cargo-accelerate");
     let trend_path = trend_dir.join("trends.json");
 
+    // Also load/share data with the unified timings store
+    let store_path = timings::get_store_path(&root);
+    let mut store = TimingStore::load(&store_path)?;
+
     let mut history = TrendHistory::load(&trend_path)?;
 
     println!("  Measuring current build times...");
     let check_time = measure_cmd(&root, "check")?;
     let build_time = measure_cmd(&root, "build")?;
 
+    // Record in unified timings store
+    timings::record_build_run(&mut store, "check", check_time, "trend", Some("trend-check"));
+    timings::record_build_run(&mut store, "build", build_time, "trend", Some("trend-build"));
+    store.save(&store_path)?;
+
     let rustc_version = get_rustc_version();
 
     let record = BuildRecord {
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
+        timestamp: timings::get_current_timestamp(),
         check_time_secs: check_time.as_secs_f64(),
         build_time_secs: build_time.as_secs_f64(),
         total_time_secs: (check_time + build_time).as_secs_f64(),

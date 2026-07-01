@@ -4,8 +4,14 @@ use crate::utils::{
 use anyhow::{Context, Result};
 use colored::*;
 use std::fs;
+use std::path::Path;
 
-const WORKFLOW_TEMPLATE: &str = r#"name: Security & Build CI
+pub struct CiOptions {
+    pub enforce_policy: bool,
+    pub budget: Option<f64>,
+}
+
+const BASE_WORKFLOW_HEAD: &str = r#"name: Security & Build CI
 
 on:
   push:
@@ -54,8 +60,9 @@ jobs:
 
       - name: Run Tests (Nextest)
         run: cargo nextest run --all-features
+"#;
 
-  regression-check:
+const REGRESSION_CHECK_JOB: &str = r#"  regression-check:
     name: Performance Regression Check
     runs-on: ubuntu-latest
     needs: build
@@ -74,7 +81,28 @@ jobs:
         run: cargo install --path .
 
       - name: Run Regression Check
-        run: cargo accelerate regression --compare --budget 600
+        run: cargo accelerate regression --compare --budget BUDGET_PLACEHOLDER
+"#;
+
+const POLICY_CHECK_JOB: &str = r#"  policy-check:
+    name: Build Policy Enforcement
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up sccache-action
+        uses: mozilla/sccache-action@v0.0.7
+
+      - name: Install cargo-accelerate
+        run: cargo install --path .
+
+      - name: Validate Build Policy
+        run: cargo accelerate audit --fail-fast
 "#;
 
 const DOCKERFILE_TEMPLATE: &str = r#"# Cargo-chef Dockerfile recipe for optimized multi-stage Docker builds
@@ -100,7 +128,22 @@ COPY --from=builder /app/target/release/{{app_name}} /usr/local/bin/app
 CMD ["app"]
 "#;
 
-pub fn run() -> Result<()> {
+const PRE_COMMIT_HOOK: &str = r#"#!/bin/sh
+# cargo-accelerate pre-commit hook
+# Run build audit before each commit to catch performance regressions early.
+# Install: ln -sf ../../.cargo-accelerate/pre-commit.sh .git/hooks/pre-commit
+
+set -e
+
+echo "Running cargo-accelerate audit..."
+cargo accelerate audit --fail-fast
+
+# Optional: uncomment to enforce a build time budget
+# echo "Checking build budget..."
+# cargo accelerate regression --compare --budget 300
+"#;
+
+pub fn run(opts: CiOptions) -> Result<()> {
     println!(
         "{}",
         "Generating Optimized CI Configurations...".bold().cyan()
@@ -108,12 +151,13 @@ pub fn run() -> Result<()> {
 
     let root = get_project_root().context("Could not find project root")?;
 
-    // 1. Create GitHub Actions workflow
+    // 1. Create GitHub Actions workflow with conditional enforcement
     let github_dir = root.join(".github").join("workflows");
     fs::create_dir_all(&github_dir)?;
 
+    let workflow = build_workflow(opts.enforce_policy, opts.budget);
     let workflow_path = github_dir.join("build.yml");
-    fs::write(&workflow_path, WORKFLOW_TEMPLATE)?;
+    fs::write(&workflow_path, workflow)?;
     println!(
         "  {} Generated GitHub Actions CI workflow: `.github/workflows/build.yml`",
         "✔".green()
@@ -142,9 +186,36 @@ pub fn run() -> Result<()> {
         "✔".green()
     );
 
-    // 3. CI Parity Check
+    // 3. Generate pre-commit hook
+    let accelerate_dir = root.join(".cargo-accelerate");
+    fs::create_dir_all(&accelerate_dir)?;
+    let hook_path = accelerate_dir.join("pre-commit.sh");
+    fs::write(&hook_path, PRE_COMMIT_HOOK)?;
+
+    // Make executable on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::metadata(&hook_path)?.permissions();
+        let mut new_perms = perms;
+        new_perms.set_mode(0o755);
+        fs::set_permissions(&hook_path, new_perms)?;
+    }
+
+    println!(
+        "  {} Generated pre-commit hook: `.cargo-accelerate/pre-commit.sh`",
+        "✔".green()
+    );
+    println!(
+        "    Install: ln -sf ../../.cargo-accelerate/pre-commit.sh .git/hooks/pre-commit"
+    );
+
+    // 4. CI Parity Check
     println!("\n{}", "CI Parity Check:".bold().yellow());
     check_ci_parity(&root)?;
+
+    // Show enforcement summary
+    print_enforcement_summary(opts);
 
     println!("\n{}", "✔ CI optimization setup complete!".bold().green());
     println!("  GitHub Actions, Docker builds, and regression checks are configured.");
@@ -152,10 +223,54 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn check_ci_parity(root: &std::path::Path) -> Result<()> {
+fn build_workflow(enforce_policy: bool, budget: Option<f64>) -> String {
+    let mut workflow = String::from(BASE_WORKFLOW_HEAD);
+
+    if budget.is_some() || enforce_policy {
+        let budget_str = budget
+            .map(|b| format!("{}", b))
+            .unwrap_or_else(|| "600".to_string());
+        let regression_job = REGRESSION_CHECK_JOB.replace("BUDGET_PLACEHOLDER", &budget_str);
+
+        if enforce_policy {
+            // When enforcing policy, regression check must fail on breach
+            let enforced = regression_job.replace("continue-on-error: true", "continue-on-error: false");
+            workflow.push_str(&enforced);
+        } else {
+            workflow.push_str(&regression_job);
+        }
+    }
+
+    if enforce_policy {
+        workflow.push_str("\n");
+        workflow.push_str(POLICY_CHECK_JOB);
+    }
+
+    workflow
+}
+
+fn print_enforcement_summary(opts: CiOptions) {
+    if opts.enforce_policy || opts.budget.is_some() {
+        println!("\n{}", "CI Enforcement:".bold().green());
+        if opts.enforce_policy {
+            println!(
+                "  {} Build policy enforcement enabled (audit + budget check)",
+                "✓".green()
+            );
+        }
+        if let Some(budget) = opts.budget {
+            println!(
+                "  {} Regression budget set to {}s — CI will fail on timeout",
+                "✓".green(),
+                budget.to_string().cyan()
+            );
+        }
+    }
+}
+
+fn check_ci_parity(root: &Path) -> Result<()> {
     let mut parity_issues = Vec::new();
 
-    // Check sccache
     let config_path = get_cargo_config_path(root);
     if config_path.exists() {
         let content = fs::read_to_string(&config_path)?;
@@ -197,7 +312,6 @@ fn check_ci_parity(root: &std::path::Path) -> Result<()> {
             .push("No .cargo/config.toml found. CI uses sccache but local config is missing.");
     }
 
-    // Check profile parity
     let cargo_toml_path = get_cargo_toml_path(root);
     if cargo_toml_path.exists() {
         let content = fs::read_to_string(&cargo_toml_path)?;
@@ -213,7 +327,6 @@ fn check_ci_parity(root: &std::path::Path) -> Result<()> {
         }
     }
 
-    // Check tooling
     if !is_tool_installed("cargo-nextest") {
         parity_issues.push("cargo-nextest is used in CI but not installed locally. Run `cargo accelerate install`.");
     }
@@ -231,4 +344,79 @@ fn check_ci_parity(root: &std::path::Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_workflow_default() {
+        let workflow = build_workflow(false, None);
+        assert!(workflow.contains("Build, Lint, and Test"));
+        assert!(!workflow.contains("regression-check"));
+        assert!(!workflow.contains("policy-check"));
+        assert!(!workflow.contains("cargo accelerate"));
+    }
+
+    #[test]
+    fn test_build_workflow_with_budget() {
+        let workflow = build_workflow(false, Some(300.0));
+        assert!(workflow.contains("regression-check"));
+        assert!(workflow.contains("--budget 300"));
+        assert!(workflow.contains("continue-on-error: true"));
+        assert!(!workflow.contains("policy-check"));
+    }
+
+    #[test]
+    fn test_build_workflow_enforce_policy() {
+        let workflow = build_workflow(true, None);
+        assert!(workflow.contains("regression-check"));
+        assert!(workflow.contains("policy-check"));
+        assert!(workflow.contains("--budget 600"));
+        assert!(workflow.contains("continue-on-error: false"));
+        assert!(workflow.contains("cargo accelerate audit --fail-fast"));
+    }
+
+    #[test]
+    fn test_build_workflow_enforce_with_budget() {
+        let workflow = build_workflow(true, Some(120.0));
+        assert!(workflow.contains("regression-check"));
+        assert!(workflow.contains("policy-check"));
+        assert!(workflow.contains("--budget 120"));
+        assert!(workflow.contains("continue-on-error: false"));
+        assert!(workflow.contains("cargo accelerate audit --fail-fast"));
+    }
+
+    #[test]
+    fn test_pre_commit_hook_content() {
+        assert!(PRE_COMMIT_HOOK.contains("cargo accelerate audit --fail-fast"));
+        assert!(PRE_COMMIT_HOOK.contains(".git/hooks/pre-commit"));
+    }
+
+    #[test]
+    fn test_print_enforcement_summary() {
+        // Just verify it doesn't panic
+        print_enforcement_summary(CiOptions {
+            enforce_policy: false,
+            budget: None,
+        });
+        print_enforcement_summary(CiOptions {
+            enforce_policy: true,
+            budget: Some(300.0),
+        });
+    }
+
+    #[test]
+    fn test_dockerfile_template() {
+        assert!(DOCKERFILE_TEMPLATE.contains("{{app_name}}"));
+        assert!(DOCKERFILE_TEMPLATE.contains("cargo-chef"));
+    }
+
+    #[test]
+    fn test_ci_parity_no_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = check_ci_parity(dir.path());
+        assert!(result.is_ok());
+    }
 }

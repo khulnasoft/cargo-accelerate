@@ -1,3 +1,4 @@
+use crate::timings::{self, TimingStore};
 use crate::utils::{get_cargo_config_path, get_cargo_toml_path, get_project_root};
 use anyhow::{Context, Result};
 use colored::*;
@@ -63,6 +64,9 @@ fn run_benchmark_sequence(
     cargo_config_path: &Path,
     incremental: bool,
 ) -> Result<()> {
+    let store_path = timings::get_store_path(root);
+    let mut store = TimingStore::load(&store_path)?;
+
     // ---- 1. MEASURE UNOPTIMIZED (BEFORE) ----
     println!(
         "\n{}",
@@ -83,6 +87,8 @@ fn run_benchmark_sequence(
 
     println!("Measuring Unoptimized times...");
     let before_stats = measure_builds(root)?;
+    record_benchmark_timings(&mut store, &before_stats, "before");
+    store.save(&store_path)?;
 
     // ---- 2. MEASURE OPTIMIZED (AFTER) ----
     println!(
@@ -104,6 +110,8 @@ fn run_benchmark_sequence(
 
     println!("Measuring Optimized times...");
     let after_stats = measure_builds(root)?;
+    record_benchmark_timings(&mut store, &after_stats, "after");
+    store.save(&store_path)?;
 
     // ---- 3. DISPLAY RESULTS ----
     println!(
@@ -146,6 +154,13 @@ fn run_benchmark_sequence(
     print_comparison("Total Time ", total_before, total_after);
 
     Ok(())
+}
+
+fn record_benchmark_timings(store: &mut TimingStore, stats: &BenchmarkStats, phase: &str) {
+    timings::record_build_run(store, "check", stats.check_time, "benchmark", Some(&format!("{}-check", phase)));
+    timings::record_build_run(store, "build", stats.build_time, "benchmark", Some(&format!("{}-build", phase)));
+    timings::record_build_run(store, "test", stats.test_time, "benchmark", Some(&format!("{}-test", phase)));
+    timings::record_build_run(store, "clippy", stats.clippy_time, "benchmark", Some(&format!("{}-clippy", phase)));
 }
 
 fn print_comparison(label: &str, before: Duration, after: Duration) {

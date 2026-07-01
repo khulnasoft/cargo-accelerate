@@ -1,5 +1,5 @@
 use crate::utils::{
-    get_cargo_config_path, get_cargo_toml_path, get_project_root, is_tool_installed,
+    available_cpus, get_cargo_config_path, get_cargo_toml_path, get_project_root, is_tool_installed,
 };
 use anyhow::{Context, Result};
 use colored::*;
@@ -113,53 +113,49 @@ fn check_rustflags_optimization(root: &Path, issues: &mut Vec<String>) -> Result
 }
 
 fn check_dependency_features(root: &Path, issues: &mut Vec<String>) -> Result<u32> {
-    let cargo_toml = get_cargo_toml_path(root);
-    if !cargo_toml.exists() {
-        return Ok(0);
-    }
+    let audit = crate::features::analyze_features(root)?;
 
-    let content = fs::read_to_string(&cargo_toml)?;
-    let parsed: toml::Value = toml::from_str(&content)?;
+    if audit.suggestions.is_empty() {
+        println!("  ✔ No dependencies to analyze");
+        return Ok(1);
+    }
 
     let mut score = 0u32;
+    let mut found_issues = false;
 
-    if let Some(deps) = parsed.get("dependencies").and_then(|d| d.as_table()) {
-        let heavy_defaults = ["syn", "tokio", "serde", "clap", "hyper", "reqwest"];
-        for dep_name in heavy_defaults {
-            if let Some(dep) = deps.get(dep_name) {
-                let has_default_features = dep
-                    .get("default-features")
-                    .and_then(|f| f.as_bool())
-                    .unwrap_or(true);
-
-                if has_default_features {
-                    println!(
-                        "  ✖ '{}' uses default features — consider disabling unused features",
-                        dep_name.cyan()
-                    );
-                    issues.push(format!(
-                        "Disable unused default features on '{}' to reduce compile time",
-                        dep_name
-                    ));
-                } else {
-                    println!("  ✔ '{}' has default-features = false", dep_name.cyan());
-                    score += 1;
-                }
-            }
+    for s in &audit.suggestions {
+        if s.is_optimized {
+            println!(
+                "  ✔ '{}' features already optimized ({})",
+                s.package_name.cyan(),
+                s.recommended_features.join(", ")
+            );
+            score += 1;
+        } else if !s.recommended_features.is_empty() {
+            println!(
+                "  ✖ '{}' uses {} default features — suggest: {} (saves ~{:.0}%)",
+                s.package_name.cyan(),
+                s.current_default_features.len(),
+                s.recommended_features.join(", ").yellow(),
+                s.estimated_savings_pct
+            );
+            issues.push(format!(
+                "Disable unused default features on '{}': set default-features = false, features = [{}]",
+                s.package_name,
+                s.recommended_features.iter().map(|f| format!("\"{}\"", f)).collect::<Vec<_>>().join(", ")
+            ));
+            found_issues = true;
         }
     }
 
-    if score == 0 {
-        // No heavy deps or all need attention
-        if issues.is_empty() {
-            println!("  ✔ No heavy dependencies with default features detected");
-            Ok(1)
-        } else {
-            Ok(0)
+    if !found_issues {
+        println!("  ✔ All dependencies are optimized");
+        if score == 0 {
+            score = 1;
         }
-    } else {
-        Ok(score)
     }
+
+    Ok(score)
 }
 
 fn check_parallel_build(root: &Path, issues: &mut Vec<String>) -> Result<u32> {
@@ -171,6 +167,10 @@ fn check_parallel_build(root: &Path, issues: &mut Vec<String>) -> Result<u32> {
     let content = fs::read_to_string(&cargo_toml)?;
     let parsed: toml::Value = toml::from_str(&content)?;
 
+    let cpus = available_cpus();
+    let suggested_dev_codegen = (cpus * 2).min(256) as i64;
+    let overhead_threshold = (cpus * 4) as i64;
+
     let dev_codegen = parsed
         .get("profile")
         .and_then(|p| p.get("dev"))
@@ -180,43 +180,64 @@ fn check_parallel_build(root: &Path, issues: &mut Vec<String>) -> Result<u32> {
     let mut score = 0u32;
 
     match dev_codegen {
-        Some(cu) if cu >= 128 => {
-            println!("  ✔ codegen-units = {} (good parallelization in dev)", cu);
-            score += 1;
-        }
         Some(cu) => {
-            println!(
-                "  ✖ codegen-units = {} (low — may underutilize CPU cores)",
-                cu
-            );
-            issues.push(format!(
-                "Increase codegen-units to 256 in [profile.dev] (currently {})",
-                cu
-            ));
+            if cu > overhead_threshold {
+                println!(
+                    "  ✖ codegen-units = {} (exceeds {} × cpus = {} — thread scheduling overhead may negate benefits)",
+                    cu, 4, overhead_threshold
+                );
+                issues.push(format!(
+                    "Reduce codegen-units in [profile.dev] from {} to at most {} (4 × {} CPUs) to avoid excessive parallelism overhead",
+                    cu, overhead_threshold, cpus
+                ));
+            } else if cu >= suggested_dev_codegen {
+                println!(
+                    "  ✔ codegen-units = {} (well-matched to {} CPU cores, ratio {:.1}×)",
+                    cu, cpus, cu as f64 / cpus as f64
+                );
+                score += 1;
+            } else {
+                println!(
+                    "  ✖ codegen-units = {} (low for {} CPU cores — may underutilize; suggest {} = {} × 2)",
+                    cu, cpus, suggested_dev_codegen, cpus
+                );
+                issues.push(format!(
+                    "Increase codegen-units in [profile.dev] from {} to {} (2× {} CPUs) to better utilize cores",
+                    cu, suggested_dev_codegen, cpus
+                ));
+            }
         }
         None => {
-            println!("  ✔ codegen-units not set (defaults to 256 in dev)");
-            score += 1;
+            let default_cu = 256i64;
+            if default_cu > overhead_threshold {
+                println!(
+                    "  ℹ  codegen-units defaults to 256 — {} CPU cores detected, suggest reducing to {} (4× {} CPUs) to avoid overhead",
+                    cpus, overhead_threshold, cpus
+                );
+            } else {
+                println!(
+                    "  ✔ codegen-units defaults to 256 (well-matched to {} CPU cores)",
+                    cpus
+                );
+                score += 1;
+            }
         }
     }
-
-    let available = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
-
-    println!("  Available CPU cores: {}", available);
 
     let cargo_config = get_cargo_config_path(root);
     if cargo_config.exists() {
         let config_content = fs::read_to_string(&cargo_config)?;
-        if !config_content.contains("build.jobs") && available > 8 {
+        if !config_content.contains("build.jobs") && cpus > 8 {
             println!(
-                "  ℹ  More than 8 cores available — consider setting `build.jobs` in config.toml"
+                "  ℹ  More than 8 cores available — consider setting `build.jobs` in .cargo/config.toml"
             );
         }
     }
 
-    Ok(if score == 0 { 0 } else { score })
+    println!("  Available CPU cores: {} (suggested dev codegen-units: {})", cpus, suggested_dev_codegen);
+    println!("  Parallelism ratio: codegen-units should be 1–2× CPUs for dev, 1 for CI/release");
+
+    Ok(score)
 }
 
 fn check_binary_size(root: &Path) -> Result<()> {
@@ -315,7 +336,14 @@ mod tests {
         create_cargo_toml(&dir, "[package]\nname = \"test\"\n");
         let mut issues = Vec::new();
         let result = check_parallel_build(dir.path(), &mut issues).unwrap();
-        assert_eq!(result, 1);
+        // Default codegen-units in dev is 256; if on <=64 CPUs, 256 should be fine
+        let cpus = available_cpus();
+        if cpus * 4 < 256 {
+            // On machines with <64 CPUs, 256 CU may exceed overhead threshold
+            assert_eq!(result, 0, "expected 0 with low CPU count");
+        } else {
+            assert_eq!(result, 1, "expected 1 on machines with sufficient CPUs");
+        }
     }
 
     #[test]
@@ -332,8 +360,34 @@ mod tests {
         );
         let mut issues = Vec::new();
         let result = check_parallel_build(dir.path(), &mut issues).unwrap();
+        // codegen-units=1 is always too low for any multi-core machine
         assert_eq!(result, 0);
         assert!(!issues.is_empty());
+    }
+
+    #[test]
+    fn test_check_parallel_build_high_codegen() {
+        let dir = TempDir::new().unwrap();
+        let cpus = available_cpus();
+        let too_high = (cpus * 4 + 1) as i64;
+        create_cargo_toml(
+            &dir,
+            &format!(
+                r#"
+            [package]
+            name = "test"
+            [profile.dev]
+            codegen-units = {}
+        "#,
+                too_high
+            ),
+        );
+        let mut issues = Vec::new();
+        let result = check_parallel_build(dir.path(), &mut issues).unwrap();
+        assert_eq!(result, 0);
+        assert!(!issues.is_empty());
+        let has_overhead_warning = issues.iter().any(|i| i.contains("4 ×"));
+        assert!(has_overhead_warning, "expected overhead warning, got: {:?}", issues);
     }
 
     #[test]
