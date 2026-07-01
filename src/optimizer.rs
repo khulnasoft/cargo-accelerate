@@ -1,4 +1,5 @@
 use crate::cli::CacheAction;
+use crate::ci::CiOptions;
 use crate::profile::{self, Scenario};
 use crate::utils::{get_cargo_config_path, get_cargo_toml_path, get_project_root};
 use anyhow::{Context, Result};
@@ -48,7 +49,10 @@ pub fn run() -> Result<()> {
 
     // 5. Generate CI workflow
     println!("\nGenerating CI Configuration...");
-    if let Err(e) = crate::ci::run() {
+    if let Err(e) = crate::ci::run(CiOptions {
+        enforce_policy: false,
+        budget: None,
+    }) {
         println!("  {} Could not generate CI workflow: {}", "⚠".yellow(), e);
     }
 

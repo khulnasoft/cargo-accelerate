@@ -119,7 +119,7 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn count_rust_loc(dir: &Path) -> Result<usize> {
+pub(crate) fn count_rust_loc(dir: &Path) -> Result<usize> {
     let mut total_lines = 0;
     for entry in WalkDir::new(dir)
         .into_iter()

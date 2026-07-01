@@ -1,5 +1,6 @@
 use crate::utils::{
-    get_cargo_config_path, get_cargo_toml_path, get_os, get_project_root, is_tool_installed,
+    available_cpus, get_cargo_config_path, get_cargo_toml_path, get_os, get_project_root,
+    is_tool_installed,
 };
 use anyhow::Result;
 use colored::*;
@@ -65,7 +66,58 @@ pub fn run() -> Result<()> {
         );
     }
 
-    // 3. Check sccache
+    // 3. CPU & parallelism analysis
+    let cpus = available_cpus();
+    println!("  Detected {} CPU core(s)", cpus.to_string().cyan());
+    if let Some(cu) = codegen_units {
+        let ratio = cu as f64 / cpus as f64;
+        if ratio > 4.0 {
+            println!(
+                "  {} codegen-units ({}) is {:.1}× CPU count ({}) — excessive parallelism may slow down builds",
+                "⚠".yellow(), cu, ratio, cpus
+            );
+            recommendations.push(format!(
+                "Reduce `codegen-units` to at most {} (4× {} CPUs) in [profile.dev]",
+                cpus * 4, cpus
+            ));
+        } else if ratio < 0.5 && cu < 256 {
+            println!(
+                "  {} codegen-units ({}) may underutilize {} CPU cores (ratio {:.1}×)",
+                "⚠".yellow(), cu, cpus, ratio
+            );
+            recommendations.push(format!(
+                "Increase `codegen-units` to {} (2× {} CPUs) in [profile.dev] for better parallelism",
+                (cpus * 2).min(256), cpus
+            ));
+        } else {
+            println!("  {} codegen-units is well-matched to CPU count", "✔".green());
+        }
+    } else if cpus < 64 {
+        println!("  {} codegen-units not set (defaults to 256, well-suited for {} cores)", "✔".green(), cpus);
+    } else {
+        println!(
+            "  {} codegen-units defaults to 256 — consider explicitly setting to {} (4× {} CPUs) to avoid overhead",
+            "ℹ".cyan(), cpus * 4, cpus
+        );
+    }
+
+    // Check build.jobs for high-core machines
+    let config_path = get_cargo_config_path(&root);
+    if cpus > 8 && config_path.exists() {
+        if let Ok(content) = fs::read_to_string(&config_path) {
+            if !content.contains("build.jobs") {
+                println!(
+                    "  {} {} cores detected — consider setting `build.jobs` in .cargo/config.toml to limit concurrent jobs",
+                    "ℹ".cyan(), cpus
+                );
+                recommendations.push(
+                    "Add `build.jobs = <n>` to .cargo/config.toml to cap parallelism (recommended: CPU count or slightly less)".into()
+                );
+            }
+        }
+    }
+
+    // 4. Check sccache
     let sccache_installed = is_tool_installed("sccache");
     let sccache_configured = check_sccache_config(&root)?;
     if sccache_installed {
@@ -84,7 +136,7 @@ pub fn run() -> Result<()> {
         missing_tools.push("sccache".to_string());
     }
 
-    // 4. Check Linker
+    // 5. Check Linker
     let os = get_os();
     let preferred_linker = match os {
         "linux" => "mold",
@@ -117,7 +169,7 @@ pub fn run() -> Result<()> {
         missing_tools.push(preferred_linker.to_string());
     }
 
-    // 5. Check cargo-nextest
+    // 6. Check cargo-nextest
     if is_tool_installed("cargo-nextest") {
         println!("{} cargo-nextest installed", "✔".green());
     } else {
@@ -125,7 +177,7 @@ pub fn run() -> Result<()> {
         missing_tools.push("cargo-nextest".to_string());
     }
 
-    // 6. Check policy file
+    // 7. Check policy file
     let policy_paths = vec![
         root.join(".cargo-accelerate").join("policy.toml"),
         root.join("accelerate-policy.toml"),
@@ -139,7 +191,7 @@ pub fn run() -> Result<()> {
         );
     }
 
-    // 7. Check baseline
+    // 8. Check baseline
     let baseline_path = root.join(".cargo-accelerate").join("baseline.json");
     if baseline_path.exists() {
         println!(
