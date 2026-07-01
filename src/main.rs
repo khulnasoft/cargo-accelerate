@@ -7,6 +7,7 @@ mod cli;
 mod daemon;
 mod dependencies;
 mod doctor;
+mod features;
 mod graph;
 mod installer;
 mod linker;
@@ -14,6 +15,7 @@ mod optimizer;
 mod policy;
 mod profile;
 mod regression;
+mod timings;
 mod tracer;
 mod trend;
 mod utils;
@@ -35,7 +37,17 @@ fn main() -> anyhow::Result<()> {
         Commands::Linker => linker::run()?,
         Commands::Workspace => workspace::run()?,
         Commands::Deps => dependencies::run()?,
-        Commands::Ci => ci::run()?,
+        Commands::Features { optimize } => {
+            let opts = features::FeaturesOptions { optimize };
+            features::run(opts)?;
+        }
+        Commands::Ci {
+            enforce_policy,
+            budget,
+        } => ci::run(ci::CiOptions {
+            enforce_policy,
+            budget,
+        })?,
         Commands::Watch => watch::run()?,
         Commands::Daemon => daemon::run()?,
         Commands::Install => installer::run()?,
@@ -60,15 +72,27 @@ fn main() -> anyhow::Result<()> {
         Commands::Trace {
             export_json,
             export_html,
+            collect_timings,
         } => {
             let opts = tracer::TraceOptions {
                 export_json,
                 export_html,
+                collect_per_crate: collect_timings,
             };
             tracer::run(opts)?;
         }
         Commands::Trend => {
             trend::run()?;
+        }
+        Commands::Timings {
+            command,
+            last,
+        } => {
+            let opts = timings::ListArgs {
+                command,
+                last,
+            };
+            timings::run_list(opts)?;
         }
         Commands::Audit {
             skip_size,

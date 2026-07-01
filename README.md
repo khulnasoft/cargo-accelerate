@@ -1,6 +1,6 @@
 # Cargo Accelerate
 
-[![CI](https://github.com/anomalyco/cargo-accelerate/actions/workflows/build.yml/badge.svg)](https://github.com/anomalyco/cargo-accelerate/actions/workflows/build.yml)
+[![CI](https://github.com/khulnasoft/cargo-accelerate/actions/workflows/build.yml/badge.svg)](https://github.com/khulnasoft/cargo-accelerate/actions/workflows/build.yml)
 [![Crates.io](https://img.shields.io/crates/v/cargo-accelerate.svg)](https://crates.io/crates/cargo-accelerate)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org)
@@ -383,14 +383,14 @@ cargo install cargo-accelerate
 
 ### From source
 ```bash
-git clone https://github.com/anomalyco/cargo-accelerate.git
+git clone https://github.com/khulnasoft/cargo-accelerate.git
 cd cargo-accelerate
 cargo install --path .
 ```
 
 ### Using the installer script
 ```bash
-curl -fsSL https://raw.githubusercontent.com/anomalyco/cargo-accelerate/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/khulnasoft/cargo-accelerate/main/install.sh | bash
 # or locally:
 ./install.sh
 ```
