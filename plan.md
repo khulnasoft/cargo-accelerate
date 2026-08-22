@@ -44,7 +44,7 @@ src/
   cli.rs            Clap CLI definition with 20+ subcommands
   
   doctor.rs         Diagnostic checks (workspace, profiles, tools, cache, linker)
-  optimize.rs       Auto-apply all optimizations to Cargo.toml/.cargo/config.toml
+  optimizer.rs      Auto-apply all optimizations to Cargo.toml/.cargo/config.toml
   benchmark.rs      Before/after build time comparison
   profile.rs        Scenario-aware build profiles (dev/test/ci/release)
   
