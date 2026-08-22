@@ -1,3 +1,4 @@
+use crate::utils::available_cpus;
 use anyhow::Result;
 use colored::*;
 use serde::{Deserialize, Serialize};
@@ -34,10 +35,11 @@ pub struct ProfileSettings {
 
 impl ProfileSettings {
     pub fn for_scenario(scenario: &Scenario) -> Self {
+        let cpus = available_cpus();
         match scenario {
             Scenario::Dev => Self {
                 incremental: Some(true),
-                codegen_units: Some(256),
+                codegen_units: Some((cpus * 2).min(256) as i64),
                 opt_level: Some(0),
                 debug: Some(1),
                 lto: Some(false),
@@ -46,7 +48,7 @@ impl ProfileSettings {
             },
             Scenario::Test => Self {
                 incremental: Some(true),
-                codegen_units: Some(256),
+                codegen_units: Some((cpus * 2).min(256) as i64),
                 opt_level: Some(0),
                 debug: Some(2),
                 lto: Some(false),
@@ -199,9 +201,11 @@ mod tests {
 
     #[test]
     fn test_dev_profile_settings() {
+        let cpus = available_cpus();
+        let expected_cu = (cpus * 2).min(256) as i64;
         let s = ProfileSettings::for_scenario(&Scenario::Dev);
         assert_eq!(s.incremental, Some(true));
-        assert_eq!(s.codegen_units, Some(256));
+        assert_eq!(s.codegen_units, Some(expected_cu));
         assert_eq!(s.opt_level, Some(0));
     }
 
@@ -223,14 +227,18 @@ mod tests {
 
     #[test]
     fn test_profile_to_toml_table() {
+        let cpus = available_cpus();
+        let expected_cu = (cpus * 2).min(256) as i64;
         let s = ProfileSettings::for_scenario(&Scenario::Dev);
         let table = s.to_toml_table();
         assert_eq!(table["incremental"].as_bool(), Some(true));
-        assert_eq!(table["codegen-units"].as_integer(), Some(256));
+        assert_eq!(table["codegen-units"].as_integer(), Some(expected_cu));
     }
 
     #[test]
     fn test_apply_profile_creates_profile() {
+        let cpus = available_cpus();
+        let expected_cu = (cpus * 2).min(256) as i64;
         use std::fs;
         let dir = TempDir::new().unwrap();
         let cargo_toml = dir.path().join("Cargo.toml");
@@ -241,7 +249,7 @@ mod tests {
         assert_eq!(doc["profile"]["dev"]["incremental"].as_bool(), Some(true));
         assert_eq!(
             doc["profile"]["dev"]["codegen-units"].as_integer(),
-            Some(256)
+            Some(expected_cu)
         );
     }
 

@@ -37,8 +37,21 @@ pub enum Commands {
     Workspace,
     /// Analyze dependency impact on build times
     Deps,
+    /// Audit dependency features and suggest minimal feature sets
+    Features {
+        /// Apply recommended minimal feature sets to Cargo.toml
+        #[arg(long)]
+        optimize: bool,
+    },
     /// Generate optimized CI workflows
-    Ci,
+    Ci {
+        /// Enforce performance policy checks in CI (fails on regression)
+        #[arg(long)]
+        enforce_policy: bool,
+        /// Maximum allowed build time in seconds (for regression budget)
+        #[arg(long)]
+        budget: Option<f64>,
+    },
     /// Enhanced watch mode
     Watch,
     /// Background daemon for warm builds and cache
@@ -76,9 +89,21 @@ pub enum Commands {
         /// Export trace as HTML report
         #[arg(long)]
         export_html: bool,
+        /// Collect per-crate timing breakdown (runs cargo build --timings=json)
+        #[arg(long)]
+        collect_timings: bool,
     },
     /// Track and visualize build performance trends over time
     Trend,
+    /// Query historical timing data collected during benchmark, regression, and trend runs
+    Timings {
+        /// Filter by command name (build, check, test, clippy)
+        #[arg(long)]
+        command: Option<String>,
+        /// Show only the last N records
+        #[arg(long)]
+        last: Option<usize>,
+    },
     /// Comprehensive build audit (rustflags, features, size, parallelism)
     Audit {
         /// Skip binary size check
@@ -155,6 +180,8 @@ pub enum CacheAction {
         #[arg(long)]
         enable: bool,
     },
+    /// Validate remote cache connectivity
+    ValidateRemote,
 }
 
 #[cfg(test)]
@@ -307,6 +334,20 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_cache_validate_remote() {
+        let cli =
+            CargoCli::try_parse_from(["cargo", "accelerate", "cache", "validate-remote"]).unwrap();
+        match cli {
+            CargoCli::Accelerate(args) => match &args.command {
+                Commands::Cache { action } => {
+                    assert!(matches!(action, Some(CacheAction::ValidateRemote)));
+                }
+                _ => panic!("expected Cache command"),
+            },
+        }
+    }
+
+    #[test]
     fn test_parse_cache_defaults_to_none() {
         let cli = CargoCli::try_parse_from(["cargo", "accelerate", "cache"]).unwrap();
         match cli {
@@ -347,7 +388,86 @@ mod tests {
     fn test_parse_ci() {
         let cli = CargoCli::try_parse_from(["cargo", "accelerate", "ci"]).unwrap();
         match cli {
-            CargoCli::Accelerate(args) => assert!(matches!(args.command, Commands::Ci)),
+            CargoCli::Accelerate(args) => {
+                assert!(matches!(
+                    args.command,
+                    Commands::Ci {
+                        enforce_policy: _,
+                        budget: _
+                    }
+                ));
+                match &args.command {
+                    Commands::Ci {
+                        enforce_policy,
+                        budget,
+                    } => {
+                        assert!(!enforce_policy);
+                        assert!(budget.is_none());
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_ci_with_enforce_policy() {
+        let cli =
+            CargoCli::try_parse_from(["cargo", "accelerate", "ci", "--enforce-policy"]).unwrap();
+        match cli {
+            CargoCli::Accelerate(args) => match &args.command {
+                Commands::Ci {
+                    enforce_policy,
+                    budget,
+                } => {
+                    assert!(*enforce_policy);
+                    assert!(budget.is_none());
+                }
+                _ => panic!("expected Ci"),
+            },
+        }
+    }
+
+    #[test]
+    fn test_parse_ci_with_budget() {
+        let cli =
+            CargoCli::try_parse_from(["cargo", "accelerate", "ci", "--budget", "120"]).unwrap();
+        match cli {
+            CargoCli::Accelerate(args) => match &args.command {
+                Commands::Ci {
+                    enforce_policy,
+                    budget,
+                } => {
+                    assert!(!enforce_policy);
+                    assert_eq!(*budget, Some(120.0));
+                }
+                _ => panic!("expected Ci"),
+            },
+        }
+    }
+
+    #[test]
+    fn test_parse_ci_with_both_flags() {
+        let cli = CargoCli::try_parse_from([
+            "cargo",
+            "accelerate",
+            "ci",
+            "--enforce-policy",
+            "--budget",
+            "300",
+        ])
+        .unwrap();
+        match cli {
+            CargoCli::Accelerate(args) => match &args.command {
+                Commands::Ci {
+                    enforce_policy,
+                    budget,
+                } => {
+                    assert!(*enforce_policy);
+                    assert_eq!(*budget, Some(300.0));
+                }
+                _ => panic!("expected Ci"),
+            },
         }
     }
 
@@ -390,9 +510,11 @@ mod tests {
                 Commands::Trace {
                     export_json,
                     export_html,
+                    collect_timings,
                 } => {
                     assert!(*export_json);
                     assert!(*export_html);
+                    assert!(!*collect_timings);
                 }
                 _ => panic!("expected Trace"),
             },
@@ -469,6 +591,28 @@ mod tests {
                     assert!(*non_interactive);
                 }
                 _ => panic!("expected Auto"),
+            },
+        }
+    }
+
+    #[test]
+    fn test_parse_features() {
+        let cli = CargoCli::try_parse_from(["cargo", "accelerate", "features"]).unwrap();
+        match cli {
+            CargoCli::Accelerate(args) => {
+                assert!(matches!(args.command, Commands::Features { .. }))
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_features_with_optimize() {
+        let cli =
+            CargoCli::try_parse_from(["cargo", "accelerate", "features", "--optimize"]).unwrap();
+        match cli {
+            CargoCli::Accelerate(args) => match &args.command {
+                Commands::Features { optimize } => assert!(*optimize),
+                _ => panic!("expected Features"),
             },
         }
     }

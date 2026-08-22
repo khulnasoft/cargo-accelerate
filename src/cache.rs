@@ -13,6 +13,7 @@ pub fn run(action: Option<CacheAction>) -> Result<()> {
         CacheAction::Disable => disable_cache()?,
         CacheAction::Status => show_status()?,
         CacheAction::Remote { enable } => configure_remote_cache(enable)?,
+        CacheAction::ValidateRemote => validate_remote_cache()?,
     }
 
     Ok(())
@@ -105,6 +106,156 @@ fn configure_remote_cache(enable: bool) -> Result<()> {
             }
             println!("  {} Remote cache config cleared.", "✔".green());
         }
+    }
+
+    Ok(())
+}
+
+fn validate_remote_cache() -> Result<()> {
+    println!(
+        "{}",
+        "Remote Cache Connectivity Validation...".bold().cyan()
+    );
+
+    // 1. Check sccache installation
+    let sccache_available = is_tool_installed("sccache");
+    if sccache_available {
+        println!("  ✓ sccache executable: {}", "Available".green());
+    } else {
+        println!("  ✗ sccache executable: {}", "Not found".red());
+        println!(
+            "    Install with: cargo install sccache --features=dist-client"
+        );
+        return Ok(());
+    }
+
+    let dist_available = is_tool_installed("sccache-dist");
+    if dist_available {
+        println!("  ✓ sccache-dist executable: {}", "Available".green());
+    } else {
+        println!("  ⚠ sccache-dist executable: {}", "Not found".yellow());
+        println!("    Install with: cargo install sccache --features=dist-client");
+        println!("    (Local-only caching will still work.)");
+    }
+
+    // 2. Check environment variables
+    let endpoint = std::env::var("SCCACHE_ENDPOINT").ok();
+    let bucket = std::env::var("SCCACHE_BUCKET").ok();
+    let region = std::env::var("SCCACHE_REGION").ok();
+    let dist_enabled = std::env::var("SCCACHE_DIST").ok();
+
+    println!("\n  Environment:");
+    match &endpoint {
+        Some(v) => println!("  ✓ SCCACHE_ENDPOINT = {}", v.green()),
+        None => println!("  ✗ SCCACHE_ENDPOINT = {}", "not set".red()),
+    }
+    match &bucket {
+        Some(v) => println!("  ✓ SCCACHE_BUCKET  = {}", v.green()),
+        None => println!("  ⚠ SCCACHE_BUCKET  = {}", "not set (may not be needed)".yellow()),
+    }
+    match &region {
+        Some(v) => println!("  ✓ SCCACHE_REGION  = {}", v.green()),
+        None => println!("  ⚠ SCCACHE_REGION  = {}", "not set (may not be needed)".yellow()),
+    }
+    match &dist_enabled {
+        Some(v) if v == "true" || v == "1" => {
+            println!("  ✓ SCCACHE_DIST    = {}", v.green());
+        }
+        Some(v) => {
+            println!("  ⚠ SCCACHE_DIST    = {}", v.yellow());
+            println!("    Set SCCACHE_DIST=true to enable distributed caching.");
+        }
+        None => {
+            println!("  ⚠ SCCACHE_DIST    = {}", "not set".yellow());
+            println!("    Set SCCACHE_DIST=true to enable distributed caching.");
+        }
+    }
+
+    // 3. Test connectivity
+    println!("\n  Connectivity test:");
+    if endpoint.is_some() {
+        let start = std::time::Instant::now();
+        let output = std::process::Command::new("sccache")
+            .args(["--dist-status"])
+            .output();
+        let elapsed = start.elapsed();
+
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let combined = format!("{}{}", stdout, stderr);
+                let latency_ms = elapsed.as_millis();
+
+                if out.status.success() {
+                    if combined.to_lowercase().contains("connected")
+                        || combined.to_lowercase().contains("ok")
+                        || combined.to_lowercase().contains("available")
+                    {
+                        println!(
+                            "  ✓ Remote cache {} (latency: {}ms)",
+                            "reachable".green(),
+                            latency_ms.to_string().cyan()
+                        );
+                    } else {
+                        println!(
+                            "  ⚠ Remote cache responded but status unclear (latency: {}ms)",
+                            latency_ms.to_string().cyan()
+                        );
+                    }
+                } else {
+                    println!(
+                        "  ✗ Remote cache {} (latency: {}ms)",
+                        "unreachable".red(),
+                        latency_ms.to_string().cyan()
+                    );
+                }
+
+                // Print any non-empty output
+                let trimmed = combined.trim();
+                if !trimmed.is_empty() {
+                    println!("\n  sccache --dist-status output:\n");
+                    for line in trimmed.lines() {
+                        println!("    {}", line.trim());
+                    }
+                }
+            }
+            Err(e) => {
+                println!(
+                    "  ✗ Failed to run sccache --dist-status: {}",
+                    e.to_string().red()
+                );
+            }
+        }
+    } else {
+        println!(
+            "  ⚠ Skipping connectivity test — SCCACHE_ENDPOINT not set."
+        );
+    }
+
+    // 4. Summary
+    println!("\n  {}", "Summary:".bold());
+    let all_set = sccache_available
+        && endpoint.is_some()
+        && dist_enabled
+            .as_deref()
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+    if all_set {
+        println!("  {} Remote cache configuration looks complete.", "✔".green());
+    } else if sccache_available {
+        println!(
+            "  {} sccache is available but remote cache is not fully configured.",
+            "⚠".yellow()
+        );
+        println!(
+            "    See: https://github.com/mozilla/sccache/blob/main/docs/dist.md"
+        );
+    } else {
+        println!(
+            "  {} sccache is not installed. Run `cargo accelerate install` first.",
+            "✖".red()
+        );
     }
 
     Ok(())
@@ -326,6 +477,46 @@ mod tests {
         let doc = DocumentMut::new();
         let result = doc.to_string();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_validate_remote_cache_no_sccache() {
+        // Should not error even when sccache is not installed (just prints warnings)
+        let result = validate_remote_cache();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_remote_cache_with_env_vars() {
+        // Set env vars temporarily; function should handle them gracefully
+        unsafe {
+            std::env::set_var("SCCACHE_ENDPOINT", "http://test-server:10500");
+            std::env::set_var("SCCACHE_BUCKET", "test-bucket");
+            std::env::set_var("SCCACHE_REGION", "us-east-1");
+            std::env::set_var("SCCACHE_DIST", "true");
+        }
+        let result = validate_remote_cache();
+        assert!(result.is_ok());
+        unsafe {
+            std::env::remove_var("SCCACHE_ENDPOINT");
+            std::env::remove_var("SCCACHE_BUCKET");
+            std::env::remove_var("SCCACHE_REGION");
+            std::env::remove_var("SCCACHE_DIST");
+        }
+    }
+
+    #[test]
+    fn test_validate_remote_cache_without_dist() {
+        unsafe {
+            std::env::set_var("SCCACHE_ENDPOINT", "http://test-server:10500");
+            std::env::set_var("SCCACHE_DIST", "false");
+        }
+        let result = validate_remote_cache();
+        assert!(result.is_ok());
+        unsafe {
+            std::env::remove_var("SCCACHE_ENDPOINT");
+            std::env::remove_var("SCCACHE_DIST");
+        }
     }
 
     #[test]

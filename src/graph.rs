@@ -1,8 +1,11 @@
-use crate::utils::get_cached_metadata_with_deps;
+use crate::utils::{get_cached_metadata_with_deps, get_project_root};
 use anyhow::{Context, Result};
 use cargo_metadata::PackageId;
 use colored::*;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs;
+use std::path::Path;
 
 struct CrateNode {
     name: String,
@@ -36,7 +39,7 @@ pub fn run() -> Result<()> {
         let dep_count = package.dependencies.len();
         let estimated_time = estimate_crate_cost(name, dep_count);
         all_crates.push(CrateNode {
-            name: name.clone(),
+            name: name.to_string(),
             loc: 0,
             dep_count,
             estimated_time,
@@ -116,6 +119,12 @@ pub fn run() -> Result<()> {
     update_fan_metrics(&mut all_crates, &edges);
     print_fan_analysis(&all_crates);
     print_partitioning_candidates(&all_crates, &edges);
+
+    // Cross-crate split suggestions
+    let root = get_project_root().context("Could not find project root")?;
+    let split_report = suggest_crate_splits(&metadata, &edges, &root)?;
+    print_split_suggestions(&split_report);
+    save_split_report(&root, &split_report)?;
 
     Ok(())
 }
@@ -364,6 +373,218 @@ fn extract_pkg_name_from_str(s: &str) -> String {
     }
 }
 
+// ── Cross-Crate Split Suggestions ──
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SplitSuggestion {
+    pub crate_name: String,
+    pub loc: usize,
+    pub dep_count: usize,
+    pub estimated_compile_secs: f64,
+    pub proposed_modules: Vec<String>,
+    pub estimated_savings_pct: f64,
+    pub reason: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct SplitReport {
+    pub suggestions: Vec<SplitSuggestion>,
+}
+
+fn find_workspace_member_dirs<'a>(
+    metadata: &'a cargo_metadata::Metadata,
+) -> Vec<(&'a str, &'a Path)> {
+    metadata
+        .packages
+        .iter()
+        .filter(|p| metadata.workspace_members.contains(&p.id))
+        .filter_map(|p| {
+            let manifest = Path::new(&p.manifest_path);
+            let dir = manifest.parent()?;
+            Some((p.name.as_str(), dir))
+        })
+        .collect()
+}
+
+fn suggest_crate_splits(
+    metadata: &cargo_metadata::Metadata,
+    edges: &[Edge],
+    _root: &Path,
+) -> Result<SplitReport> {
+    let workspace_names: HashSet<&str> = metadata
+        .packages
+        .iter()
+        .filter(|p| metadata.workspace_members.contains(&p.id))
+        .map(|p| p.name.as_str())
+        .collect();
+
+    let member_dirs = find_workspace_member_dirs(metadata);
+    let mut suggestions = Vec::new();
+
+    for (name, dir) in &member_dirs {
+        let loc = crate::workspace::count_rust_loc(dir).unwrap_or(0);
+        let package = metadata
+            .packages
+            .iter()
+            .find(|p| p.name.as_str() == *name)
+            .unwrap();
+
+        let dep_count = package.dependencies.len();
+        let external_dep_count = package
+            .dependencies
+            .iter()
+            .filter(|d| !workspace_names.contains(d.name.as_str()))
+            .count();
+
+        // Estimate compile time: 1.5s baseline + 0.005s/LoC + 0.2s/dep
+        let estimated = 1.5 + (loc as f64 * 0.005) + (dep_count as f64 * 0.2);
+
+        // Determine if this crate is a split candidate:
+        //  - "wide": >1000 LoC with low external-dep density (<1 ext dep per 200 lines)
+        //  - Or: fan_in > 3 (many dependents) — good utility extraction candidate
+        //  - Or: simply >3000 LoC (always worth considering a split)
+        let fan_in = edges
+            .iter()
+            .filter(|e| e.to == *name && workspace_names.contains(e.from.as_str()))
+            .count();
+        let fan_out = edges
+            .iter()
+            .filter(|e| e.from == *name && workspace_names.contains(e.to.as_str()))
+            .count();
+
+        let external_dep_ratio = if loc > 0 {
+            external_dep_count as f64 / loc as f64 * 1000.0
+        } else {
+            0.0
+        };
+
+        let is_large = loc > 3000;
+        let is_wide = loc > 1000 && external_dep_ratio < 5.0;
+        let is_utility_hub = fan_in > 3 && loc > 800;
+
+        if !is_large && !is_wide && !is_utility_hub {
+            continue;
+        }
+
+        let proposed_modules = propose_modules(name, loc, fan_in, fan_out, external_dep_count);
+        let savings = if loc > 3000 {
+            30.0
+        } else if is_wide {
+            // Wide crates with few external deps benefit from splitting into domain modules
+            20.0
+        } else {
+            // Utility crates benefit from being extracted into a shared crate
+            15.0
+        };
+
+        let reason = if is_large {
+            format!("Large crate ({} LoC) — splitting into {} would reduce per-change rebuild scope", loc, proposed_modules.join(", "))
+        } else if is_wide {
+            format!("Wide crate ({} LoC, {} external deps) — low external dependency density ({:.1}/kLoC) suggests self-contained logic that can be modularized", loc, external_dep_count, external_dep_ratio)
+        } else {
+            format!("Utility hub (fan-in: {}, {} LoC) — extracting shared types/logic reduces recompilation of dependents", fan_in, loc)
+        };
+
+        suggestions.push(SplitSuggestion {
+            crate_name: name.to_string(),
+            loc,
+            dep_count,
+            estimated_compile_secs: estimated,
+            proposed_modules,
+            estimated_savings_pct: savings,
+            reason,
+        });
+    }
+
+    suggestions.sort_by(|a, b| {
+        b.estimated_savings_pct
+            .partial_cmp(&a.estimated_savings_pct)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    Ok(SplitReport { suggestions })
+}
+
+fn propose_modules(
+    name: &str,
+    _loc: usize,
+    fan_in: usize,
+    fan_out: usize,
+    _external_dep_count: usize,
+) -> Vec<String> {
+    let mut modules = Vec::new();
+
+    if fan_in > 3 {
+        modules.push(format!("{}-core", name));
+        modules.push(format!("{}-types", name));
+    }
+    if fan_out > 10 {
+        modules.push(format!("{}-utils", name));
+    }
+    if fan_in <= 3 && fan_out <= 10 {
+        modules.push(format!("{}-core", name));
+        modules.push(format!("{}-macros", name));
+    }
+
+    if modules.is_empty() {
+        modules.push(format!("{}-core", name));
+    }
+
+    modules
+}
+
+fn save_split_report(root: &Path, report: &SplitReport) -> Result<()> {
+    let dir = root.join(".cargo-accelerate");
+    fs::create_dir_all(&dir)?;
+    let path = dir.join("splits.toml");
+
+    let toml_str = toml::to_string(report)?;
+    fs::write(&path, toml_str)?;
+    println!("  {} Split suggestions saved to {}", "✔".green(), path.display());
+    Ok(())
+}
+
+fn print_split_suggestions(report: &SplitReport) {
+    if report.suggestions.is_empty() {
+        println!(
+            "\n{} No crates identified as split candidates.",
+            "✔".green()
+        );
+        return;
+    }
+
+    println!(
+        "\n{}",
+        "Cross-Crate Optimization Suggestions:".bold().yellow()
+    );
+    println!(
+        "  The following workspace members may benefit from splitting:"
+    );
+
+    for s in &report.suggestions {
+        println!();
+        println!(
+            "  {:<25} {:>6} LoC, {} deps, ~{:.1}s compile",
+            s.crate_name.bold().red(),
+            s.loc,
+            s.dep_count,
+            s.estimated_compile_secs
+        );
+        println!("  ├ Reason: {}", s.reason);
+        println!(
+            "  ├ Proposed: split into {}",
+            s.proposed_modules.join(", ").cyan()
+        );
+        println!(
+            "  └ Estimated savings: ~{:.0}% on rebuilds of affected modules",
+            s.estimated_savings_pct
+        );
+        println!(
+            "    → See .cargo-accelerate/splits.toml for suggested Cargo.toml changes"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,5 +689,85 @@ mod tests {
     fn test_estimate_crate_cost_zero_deps() {
         let cost = estimate_crate_cost("my-crate", 0);
         assert!((cost - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_propose_modules_utility_hub() {
+        let modules = propose_modules("serde-ext", 2000, 6, 3, 2);
+        assert!(modules.contains(&"serde-ext-core".to_string()));
+        assert!(modules.contains(&"serde-ext-types".to_string()));
+    }
+
+    #[test]
+    fn test_propose_modules_large_fan_out() {
+        let modules = propose_modules("utils", 5000, 2, 15, 1);
+        assert!(modules.contains(&"utils-utils".to_string()));
+    }
+
+    #[test]
+    fn test_propose_modules_fallback() {
+        let modules = propose_modules("tiny-crate", 500, 0, 0, 0);
+        assert!(modules.contains(&"tiny-crate-core".to_string()));
+    }
+
+    #[test]
+    fn test_split_suggestion_ordering() {
+        let mut report = SplitReport {
+            suggestions: vec![
+                SplitSuggestion {
+                    crate_name: "A".into(),
+                    loc: 5000,
+                    dep_count: 3,
+                    estimated_compile_secs: 30.0,
+                    proposed_modules: vec!["a-core".into()],
+                    estimated_savings_pct: 30.0,
+                    reason: "Large crate".into(),
+                },
+                SplitSuggestion {
+                    crate_name: "B".into(),
+                    loc: 1500,
+                    dep_count: 1,
+                    estimated_compile_secs: 10.0,
+                    proposed_modules: vec!["b-core".into()],
+                    estimated_savings_pct: 20.0,
+                    reason: "Wide crate".into(),
+                },
+            ],
+        };
+        report
+            .suggestions
+            .sort_by(|a, b| b.estimated_savings_pct.partial_cmp(&a.estimated_savings_pct).unwrap());
+        assert_eq!(report.suggestions[0].crate_name, "A");
+        assert_eq!(report.suggestions[1].crate_name, "B");
+    }
+
+    #[test]
+    fn test_split_report_serde_roundtrip() {
+        let report = SplitReport {
+            suggestions: vec![SplitSuggestion {
+                crate_name: "foo".into(),
+                loc: 2000,
+                dep_count: 2,
+                estimated_compile_secs: 15.0,
+                proposed_modules: vec!["foo-core".into(), "foo-macros".into()],
+                estimated_savings_pct: 25.0,
+                reason: "Wide crate".into(),
+            }],
+        };
+        let toml_str = toml::to_string(&report).unwrap();
+        let deserialized: SplitReport = toml::from_str(&toml_str).unwrap();
+        assert_eq!(deserialized.suggestions.len(), 1);
+        assert_eq!(deserialized.suggestions[0].crate_name, "foo");
+        assert_eq!(
+            deserialized.suggestions[0].proposed_modules,
+            vec!["foo-core", "foo-macros"]
+        );
+        assert!((deserialized.suggestions[0].estimated_savings_pct - 25.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_extract_pkg_name_from_str_with_space() {
+        assert_eq!(extract_pkg_name_from_str("foo 0.1.0 (path+..."), "foo");
+        assert_eq!(extract_pkg_name_from_str("bar"), "bar");
     }
 }

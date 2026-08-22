@@ -1,3 +1,4 @@
+use crate::timings::{self, TimingStore};
 use crate::utils::get_project_root;
 use anyhow::{Context, Result};
 use colored::*;
@@ -42,8 +43,11 @@ pub fn run(options: CliOptions) -> Result<()> {
     let baseline_dir = root.join(".cargo-accelerate");
     let baseline_path = baseline_dir.join("baseline.json");
 
+    let store_path = timings::get_store_path(&root);
+    let mut store = TimingStore::load(&store_path)?;
+
     if options.compare {
-        return compare_with_baseline(&root, &baseline_path, &options);
+        return compare_with_baseline(&root, &baseline_path, &options, &mut store, &store_path);
     }
 
     let stats = measure_current_builds(&root)?;
@@ -67,7 +71,7 @@ pub fn run(options: CliOptions) -> Result<()> {
     }
 
     if baseline_path.exists() {
-        compare_with_baseline(&root, &baseline_path, &options)?;
+        compare_with_baseline(&root, &baseline_path, &options, &mut store, &store_path)?;
     } else {
         println!("  No baseline found. Use --save to create one after your next measurement.");
     }
@@ -91,6 +95,8 @@ fn compare_with_baseline(
     root: &PathBuf,
     baseline_path: &PathBuf,
     options: &CliOptions,
+    store: &mut TimingStore,
+    store_path: &PathBuf,
 ) -> Result<()> {
     let baseline_content =
         fs::read_to_string(baseline_path).context("Failed to read baseline file")?;
@@ -98,6 +104,11 @@ fn compare_with_baseline(
         serde_json::from_str(&baseline_content).context("Failed to parse baseline JSON")?;
 
     let current = measure_current_builds(root)?;
+
+    // Record timings for historical tracking
+    timings::record_build_run(store, "build", std::time::Duration::from_secs_f64(current.build_time_secs), "regression", Some("regression-current"));
+    timings::record_build_run(store, "check", std::time::Duration::from_secs_f64(current.check_time_secs), "regression", Some("regression-estimated"));
+    store.save(store_path)?;
 
     println!("\n{}", "Regression Report:".bold().yellow());
     println!(

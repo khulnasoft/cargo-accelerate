@@ -57,6 +57,12 @@ pub fn get_os() -> &'static str {
     }
 }
 
+pub fn available_cpus() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,6 +72,14 @@ mod tests {
     fn test_get_os_returns_valid() {
         let os = get_os();
         assert!(matches!(os, "linux" | "macos" | "windows" | "unknown"));
+    }
+
+    #[test]
+    fn test_available_cpus_returns_positive() {
+        let cpus = available_cpus();
+        assert!(cpus >= 1);
+        // Sanity check: unlikely to have more than 1024 CPUs
+        assert!(cpus < 1024);
     }
 
     #[test]
