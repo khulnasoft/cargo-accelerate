@@ -123,7 +123,13 @@ pub fn run() -> Result<()> {
 }
 
 fn install_tool_via_cargo(name: &str) -> Result<()> {
-    run_command("cargo", &["install", name])
+    let mut args = vec!["install"];
+    // cargo-nextest refuses to compile without --locked
+    if name == "cargo-nextest" {
+        args.push("--locked");
+    }
+    args.push(name);
+    run_command("cargo", &args)
 }
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<()> {

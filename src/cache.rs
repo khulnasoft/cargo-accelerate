@@ -13,7 +13,7 @@ pub fn run(action: Option<CacheAction>) -> Result<()> {
         CacheAction::Disable => disable_cache()?,
         CacheAction::Status => show_status()?,
         CacheAction::Remote { enable } => configure_remote_cache(enable)?,
-        CacheAction::ValidateRemote => validate_remote_cache()?,
+        CacheAction::ValidateRemote { show_values } => validate_remote_cache(show_values)?,
     }
 
     Ok(())
@@ -111,7 +111,38 @@ fn configure_remote_cache(enable: bool) -> Result<()> {
     Ok(())
 }
 
-fn validate_remote_cache() -> Result<()> {
+fn mask_value(v: &str) -> String {
+    // Mask credentials embedded in URLs (scheme://user:pass@host)
+    if let Some(scheme_end) = v.find("://") {
+        let rest = &v[scheme_end + 3..];
+        if let Some(at_idx) = rest.find('@') {
+            let scheme = &v[..scheme_end + 3];
+            let host = &rest[at_idx + 1..];
+            return format!("{}***@{}", scheme, host);
+        }
+    }
+    // Mask obvious secret values
+    let lower = v.to_lowercase();
+    if lower.contains("token")
+        || lower.contains("secret")
+        || lower.contains("password")
+        || lower.contains("api_key")
+        || lower.contains("access_key")
+    {
+        return "***".to_string();
+    }
+    v.to_string()
+}
+
+fn display_env(v: &str, show_values: bool) -> String {
+    if show_values {
+        mask_value(v)
+    } else {
+        "set".to_string()
+    }
+}
+
+fn validate_remote_cache(show_values: bool) -> Result<()> {
     println!(
         "{}",
         "Remote Cache Connectivity Validation...".bold().cyan()
@@ -146,23 +177,23 @@ fn validate_remote_cache() -> Result<()> {
 
     println!("\n  Environment:");
     match &endpoint {
-        Some(v) => println!("  ✓ SCCACHE_ENDPOINT = {}", v.green()),
+        Some(v) => println!("  ✓ SCCACHE_ENDPOINT = {}", display_env(v, show_values).green()),
         None => println!("  ✗ SCCACHE_ENDPOINT = {}", "not set".red()),
     }
     match &bucket {
-        Some(v) => println!("  ✓ SCCACHE_BUCKET  = {}", v.green()),
+        Some(v) => println!("  ✓ SCCACHE_BUCKET  = {}", display_env(v, show_values).green()),
         None => println!("  ⚠ SCCACHE_BUCKET  = {}", "not set (may not be needed)".yellow()),
     }
     match &region {
-        Some(v) => println!("  ✓ SCCACHE_REGION  = {}", v.green()),
+        Some(v) => println!("  ✓ SCCACHE_REGION  = {}", display_env(v, show_values).green()),
         None => println!("  ⚠ SCCACHE_REGION  = {}", "not set (may not be needed)".yellow()),
     }
     match &dist_enabled {
         Some(v) if v == "true" || v == "1" => {
-            println!("  ✓ SCCACHE_DIST    = {}", v.green());
+            println!("  ✓ SCCACHE_DIST    = {}", display_env(v, show_values).green());
         }
         Some(v) => {
-            println!("  ⚠ SCCACHE_DIST    = {}", v.yellow());
+            println!("  ⚠ SCCACHE_DIST    = {}", display_env(v, show_values).yellow());
             println!("    Set SCCACHE_DIST=true to enable distributed caching.");
         }
         None => {
@@ -187,11 +218,14 @@ fn validate_remote_cache() -> Result<()> {
                 let combined = format!("{}{}", stdout, stderr);
                 let latency_ms = elapsed.as_millis();
 
+                let lowered = combined.to_lowercase();
+                let healthy = lowered.contains("connected")
+                    || lowered.contains("available")
+                    || lowered
+                        .split(|c: char| !c.is_ascii_alphanumeric())
+                        .any(|w| w == "ok");
                 if out.status.success() {
-                    if combined.to_lowercase().contains("connected")
-                        || combined.to_lowercase().contains("ok")
-                        || combined.to_lowercase().contains("available")
-                    {
+                    if healthy {
                         println!(
                             "  ✓ Remote cache {} (latency: {}ms)",
                             "reachable".green(),
@@ -211,12 +245,14 @@ fn validate_remote_cache() -> Result<()> {
                     );
                 }
 
-                // Print any non-empty output
-                let trimmed = combined.trim();
-                if !trimmed.is_empty() {
-                    println!("\n  sccache --dist-status output:\n");
-                    for line in trimmed.lines() {
-                        println!("    {}", line.trim());
+                // Print raw command output only when explicitly requested
+                if show_values {
+                    let trimmed = combined.trim();
+                    if !trimmed.is_empty() {
+                        println!("\n  sccache --dist-status output:\n");
+                        for line in trimmed.lines() {
+                            println!("    {}", mask_value(line.trim()));
+                        }
                     }
                 }
             }
@@ -482,7 +518,7 @@ mod tests {
     #[test]
     fn test_validate_remote_cache_no_sccache() {
         // Should not error even when sccache is not installed (just prints warnings)
-        let result = validate_remote_cache();
+        let result = validate_remote_cache(false);
         assert!(result.is_ok());
     }
 
@@ -495,7 +531,7 @@ mod tests {
             std::env::set_var("SCCACHE_REGION", "us-east-1");
             std::env::set_var("SCCACHE_DIST", "true");
         }
-        let result = validate_remote_cache();
+        let result = validate_remote_cache(false);
         assert!(result.is_ok());
         unsafe {
             std::env::remove_var("SCCACHE_ENDPOINT");
@@ -511,12 +547,31 @@ mod tests {
             std::env::set_var("SCCACHE_ENDPOINT", "http://test-server:10500");
             std::env::set_var("SCCACHE_DIST", "false");
         }
-        let result = validate_remote_cache();
+        let result = validate_remote_cache(false);
         assert!(result.is_ok());
         unsafe {
             std::env::remove_var("SCCACHE_ENDPOINT");
             std::env::remove_var("SCCACHE_DIST");
         }
+    }
+
+    #[test]
+    fn test_mask_value_redacts_credentials() {
+        assert_eq!(
+            mask_value("https://user:password@cache.example.com:10500"),
+            "https://***@cache.example.com:10500"
+        );
+        assert_eq!(mask_value("https://cache.example.com:10500"), "https://cache.example.com:10500");
+        assert_eq!(mask_value("my-token-12345"), "***");
+        assert_eq!(mask_value("super_secret_api_key_123"), "***");
+        assert_eq!(mask_value("plain-value"), "plain-value");
+    }
+
+    #[test]
+    fn test_display_env_hides_values_by_default() {
+        assert_eq!(display_env("http://test-server:10500", false), "set");
+        assert_eq!(display_env("http://test-server:10500", true), "http://test-server:10500");
+        assert_eq!(display_env("http://user:pass@host", true), "http://***@host");
     }
 
     #[test]

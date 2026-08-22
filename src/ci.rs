@@ -151,6 +151,8 @@ pub fn run(opts: CiOptions) -> Result<()> {
 
     let root = get_project_root().context("Could not find project root")?;
 
+    validate_budget(opts.budget)?;
+
     // 1. Create GitHub Actions workflow with conditional enforcement
     let github_dir = root.join(".github").join("workflows");
     fs::create_dir_all(&github_dir)?;
@@ -220,6 +222,15 @@ pub fn run(opts: CiOptions) -> Result<()> {
     println!("\n{}", "✔ CI optimization setup complete!".bold().green());
     println!("  GitHub Actions, Docker builds, and regression checks are configured.");
 
+    Ok(())
+}
+
+fn validate_budget(budget: Option<f64>) -> Result<()> {
+    if let Some(b) = budget {
+        if !b.is_finite() || b <= 0.0 {
+            anyhow::bail!("CI regression budget must be a finite number greater than 0 (got {})", b);
+        }
+    }
     Ok(())
 }
 
@@ -357,6 +368,22 @@ mod tests {
         assert!(!workflow.contains("regression-check"));
         assert!(!workflow.contains("policy-check"));
         assert!(!workflow.contains("cargo accelerate"));
+    }
+
+    #[test]
+    fn test_validate_budget_accepts_positive() {
+        assert!(validate_budget(None).is_ok());
+        assert!(validate_budget(Some(1.0)).is_ok());
+        assert!(validate_budget(Some(300.5)).is_ok());
+    }
+
+    #[test]
+    fn test_validate_budget_rejects_invalid() {
+        assert!(validate_budget(Some(0.0)).is_err());
+        assert!(validate_budget(Some(-5.0)).is_err());
+        assert!(validate_budget(Some(f64::NAN)).is_err());
+        assert!(validate_budget(Some(f64::INFINITY)).is_err());
+        assert!(validate_budget(Some(f64::NEG_INFINITY)).is_err());
     }
 
     #[test]

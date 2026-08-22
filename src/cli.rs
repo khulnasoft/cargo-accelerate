@@ -181,7 +181,11 @@ pub enum CacheAction {
         enable: bool,
     },
     /// Validate remote cache connectivity
-    ValidateRemote,
+    ValidateRemote {
+        /// Print actual env var values and raw command output (may contain secrets)
+        #[arg(long)]
+        show_values: bool,
+    },
 }
 
 #[cfg(test)]
@@ -340,7 +344,33 @@ mod tests {
         match cli {
             CargoCli::Accelerate(args) => match &args.command {
                 Commands::Cache { action } => {
-                    assert!(matches!(action, Some(CacheAction::ValidateRemote)));
+                    assert!(matches!(
+                        action,
+                        Some(CacheAction::ValidateRemote { show_values: false })
+                    ));
+                }
+                _ => panic!("expected Cache command"),
+            },
+        }
+    }
+
+    #[test]
+    fn test_parse_cache_validate_remote_show_values() {
+        let cli = CargoCli::try_parse_from([
+            "cargo",
+            "accelerate",
+            "cache",
+            "validate-remote",
+            "--show-values",
+        ])
+        .unwrap();
+        match cli {
+            CargoCli::Accelerate(args) => match &args.command {
+                Commands::Cache { action } => {
+                    assert!(matches!(
+                        action,
+                        Some(CacheAction::ValidateRemote { show_values: true })
+                    ));
                 }
                 _ => panic!("expected Cache command"),
             },

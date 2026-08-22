@@ -300,6 +300,23 @@ mod tests {
         fs::write(dir.path().join("Cargo.toml"), content).unwrap();
     }
 
+    fn create_workspace_with_path_dep(dir: &TempDir, manifest: &str, dep_name: &str) {
+        let root = dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("dep/src")).unwrap();
+        fs::write(root.join("Cargo.toml"), manifest).unwrap();
+        fs::write(
+            root.join("dep/Cargo.toml"),
+            format!(
+                "[package]\nname = \"{}\"\nversion = \"1.0.0\"\n[features]\ndefault = [\"full\"]\nfull = []\nderive = []\n",
+                dep_name
+            ),
+        )
+        .unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
+        fs::write(root.join("dep/src/lib.rs"), "pub fn y() {}\n").unwrap();
+    }
+
     fn create_cargo_config(dir: &TempDir, content: &str) {
         let config_dir = dir.path().join(".cargo");
         fs::create_dir_all(&config_dir).unwrap();
@@ -393,15 +410,15 @@ mod tests {
     #[test]
     fn test_check_dependency_features_defaults() {
         let dir = TempDir::new().unwrap();
-        create_cargo_toml(
+        create_workspace_with_path_dep(
             &dir,
             r#"
             [package]
             name = "test"
             [dependencies]
-            syn = "2.0"
-            tokio = { version = "1.0", features = ["rt"] }
+            syn = { path = "dep" }
         "#,
+            "syn",
         );
         let mut issues = Vec::new();
         let result = check_dependency_features(dir.path(), &mut issues).unwrap();
@@ -411,14 +428,15 @@ mod tests {
     #[test]
     fn test_check_dependency_features_explicit_no_default() {
         let dir = TempDir::new().unwrap();
-        create_cargo_toml(
+        create_workspace_with_path_dep(
             &dir,
             r#"
             [package]
             name = "test"
             [dependencies]
-            syn = { version = "2.0", default-features = false }
+            syn = { path = "dep", default-features = false }
         "#,
+            "syn",
         );
         let mut issues = Vec::new();
         let result = check_dependency_features(dir.path(), &mut issues).unwrap();

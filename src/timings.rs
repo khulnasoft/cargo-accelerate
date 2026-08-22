@@ -125,8 +125,11 @@ pub fn get_git_branch(root: &Path) -> String {
         .output()
         .ok();
     match output {
-        Some(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        None => "unknown".into(),
+        Some(o) if o.status.success() => {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.is_empty() { "unknown".into() } else { s }
+        }
+        _ => "unknown".into(),
     }
 }
 
@@ -137,8 +140,11 @@ pub fn get_git_commit_hash(root: &Path) -> String {
         .output()
         .ok();
     match output {
-        Some(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        None => "unknown".into(),
+        Some(o) if o.status.success() => {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.is_empty() { "unknown".into() } else { s }
+        }
+        _ => "unknown".into(),
     }
 }
 
@@ -238,17 +244,28 @@ pub struct ListArgs {
     pub last: Option<usize>,
 }
 
-fn chrono_like_timestamp(unix_ts: u64) -> String {
+pub fn chrono_like_timestamp(unix_ts: u64) -> String {
+    chrono_like_timestamp_fmt(unix_ts, true)
+}
+
+pub fn chrono_like_timestamp_fmt(unix_ts: u64, with_seconds: bool) -> String {
     let secs = unix_ts as i64;
     let nanos = 0u32;
     let dt = time_to_datetime(secs, nanos);
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        dt.0, dt.1, dt.2, dt.3, dt.4, dt.5
-    )
+    if with_seconds {
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            dt.0, dt.1, dt.2, dt.3, dt.4, dt.5
+        )
+    } else {
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}",
+            dt.0, dt.1, dt.2, dt.3, dt.4
+        )
+    }
 }
 
-fn time_to_datetime(secs: i64, _nanos: u32) -> (i32, u32, u32, u32, u32, u32) {
+pub fn time_to_datetime(secs: i64, _nanos: u32) -> (i32, u32, u32, u32, u32, u32) {
     let s = secs;
     // days since epoch
     let mut days = s / 86400;
@@ -301,7 +318,7 @@ fn time_to_datetime(secs: i64, _nanos: u32) -> (i32, u32, u32, u32, u32, u32) {
     (y, m, d, hours, minutes, seconds)
 }
 
-fn is_leap(year: i32) -> bool {
+pub fn is_leap(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 

@@ -1,4 +1,4 @@
-use crate::utils::{get_cached_metadata_with_deps, get_cargo_toml_path, get_project_root};
+use crate::utils::{get_cached_metadata_for_root, get_cargo_toml_path, get_project_root};
 use anyhow::{Context, Result};
 use colored::*;
 use serde::{Deserialize, Serialize};
@@ -62,11 +62,6 @@ pub fn analyze_features(root: &Path) -> Result<FeatureAudit> {
     let content = fs::read_to_string(&cargo_toml)?;
     let parsed: toml::Value = toml::from_str(&content)?;
 
-    let metadata = get_cached_metadata_with_deps()?;
-    let known = known_feature_suggestions();
-
-    let mut suggestions = Vec::new();
-
     let direct_deps = parsed
         .get("dependencies")
         .and_then(|d| d.as_table())
@@ -76,6 +71,15 @@ pub fn analyze_features(root: &Path) -> Result<FeatureAudit> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+
+    if direct_deps.is_empty() {
+        return Ok(FeatureAudit::default());
+    }
+
+    let metadata = get_cached_metadata_for_root(root)?;
+    let known = known_feature_suggestions();
+
+    let mut suggestions = Vec::new();
 
     for dep_name in &direct_deps {
         let package = metadata.packages.iter().find(|p| p.name == *dep_name);
@@ -390,6 +394,45 @@ mod tests {
         create_cargo_toml(&dir, "[package]\nname = \"test\"\n");
         let audit = analyze_features(dir.path()).unwrap();
         assert_eq!(audit.suggestions.len(), 0);
+    }
+
+    #[test]
+    fn test_analyze_features_uses_root_metadata() {
+        if !crate::utils::is_tool_installed("cargo") {
+            return;
+        }
+        // Build a temp workspace whose dependency "tokio" is a LOCAL path dep
+        // with a distinctive default feature, so a correct root-relative
+        // metadata lookup is required for the suggestion to be accurate.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("dep/src")).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"audit-test\"\nversion = \"0.1.0\"\n[dependencies]\ntokio = { path = \"dep\" }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("dep/Cargo.toml"),
+            "[package]\nname = \"tokio\"\nversion = \"9.9.9\"\n[features]\ndefault = [\"full\"]\nfull = []\nrt-multi-thread = []\n",
+        )
+        .unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
+        fs::write(root.join("dep/src/lib.rs"), "pub fn y() {}\n").unwrap();
+
+        let audit = analyze_features(root).unwrap();
+        let tokio = audit
+            .suggestions
+            .iter()
+            .find(|s| s.package_name == "tokio")
+            .expect("expected a suggestion for tokio");
+        assert_eq!(tokio.current_default_features, vec!["full".to_string()]);
+        assert_eq!(
+            tokio.recommended_features,
+            vec!["rt-multi-thread".to_string()]
+        );
+        assert!(!tokio.is_optimized);
     }
 
     #[test]

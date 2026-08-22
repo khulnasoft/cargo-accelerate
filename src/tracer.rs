@@ -1,4 +1,4 @@
-use crate::timings::{get_store_path, TimingStore};
+use crate::timings::{chrono_like_timestamp_fmt, get_store_path, TimingStore};
 use crate::utils::get_project_root;
 use anyhow::{Context, Result};
 use colored::*;
@@ -555,7 +555,7 @@ fn build_trend_json(trend: &HashMap<String, Vec<(u64, u64)>>) -> String {
     for (i, (cmd, runs)) in trend.iter().enumerate() {
         let x_vals: Vec<String> = runs
             .iter()
-            .map(|(ts, _)| chrono_like_timestamp(*ts))
+            .map(|(ts, _)| chrono_like_timestamp_fmt(*ts, false))
             .collect();
         let y_vals: Vec<f64> = runs.iter().map(|(_, ms)| *ms as f64 / 1000.0).collect();
         let x_json = serde_json::to_string(&x_vals).unwrap_or_default();
@@ -570,73 +570,8 @@ fn build_trend_json(trend: &HashMap<String, Vec<(u64, u64)>>) -> String {
             "marker": { "color": color },
             "line": { "color": color },
         }).to_string());
-        ));
     }
     format!(r#"{{"traces":[{}]}}"#, traces.join(","))
-}
-
-fn chrono_like_timestamp(unix_ts: u64) -> String {
-    let secs = unix_ts as i64;
-    let nanos = 0u32;
-    let dt = time_to_datetime(secs, nanos);
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}",
-        dt.0, dt.1, dt.2, dt.3, dt.4
-    )
-}
-
-fn time_to_datetime(secs: i64, _nanos: u32) -> (i32, u32, u32, u32, u32, u32) {
-    let s = secs;
-    let mut days = s / 86400;
-    let n = if s < 0 {
-        days -= 1;
-        let rem = s % 86400;
-        if rem < 0 { rem + 86400 } else { rem }
-    } else {
-        s % 86400
-    };
-    let hours = (n / 3600) as u32;
-    let minutes = ((n % 3600) / 60) as u32;
-    let seconds = (n % 60) as u32;
-
-    let mut y = 1970i32;
-    loop {
-        let days_in_year = if is_leap(y) { 366 } else { 365 };
-        if days < days_in_year {
-            break;
-        }
-        days -= days_in_year;
-        y += 1;
-    }
-    let leap = is_leap(y);
-    let month_days: [i64; 12] = [
-        31,
-        if leap { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    let mut m = 0u32;
-    for (i, &md) in month_days.iter().enumerate() {
-        if days < md {
-            m = (i + 1) as u32;
-            break;
-        }
-        days -= md;
-    }
-    let d = (days + 1) as u32;
-    (y, m, d, hours, minutes, seconds)
-}
-
-fn is_leap(year: i32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
 #[cfg(test)]
