@@ -38,7 +38,6 @@ A comprehensive cargo companion tool that fills the gap in Rust build-time optim
 
 ### How It's Organized
 
-```
 src/
   main.rs           Entry point; command dispatch
   cli.rs            Clap CLI definition with 20+ subcommands
