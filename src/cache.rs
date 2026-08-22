@@ -218,11 +218,14 @@ fn validate_remote_cache(show_values: bool) -> Result<()> {
                 let combined = format!("{}{}", stdout, stderr);
                 let latency_ms = elapsed.as_millis();
 
+                let lowered = combined.to_lowercase();
+                let healthy = lowered.contains("connected")
+                    || lowered.contains("available")
+                    || lowered
+                        .split(|c: char| !c.is_ascii_alphanumeric())
+                        .any(|w| w == "ok");
                 if out.status.success() {
-                    if combined.to_lowercase().contains("connected")
-                        || combined.to_lowercase().contains("ok")
-                        || combined.to_lowercase().contains("available")
-                    {
+                    if healthy {
                         println!(
                             "  ✓ Remote cache {} (latency: {}ms)",
                             "reachable".green(),
