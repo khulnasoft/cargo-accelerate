@@ -218,9 +218,10 @@ pub fn run_list(args: ListArgs) -> Result<()> {
         let ts = chrono_like_timestamp(run.timestamp);
         let duration = format_duration(run.duration_ms);
         let label = run.label.as_deref().unwrap_or("-");
-        let branch = if run.branch.len() > 10 {
-            &run.branch[..10]
-        } else {
+        let branch = run.branch.chars().take(10).collect::<String>();
+        println!(
+            "{:<4} {:<20} {:<10} {:<12} {:<12} {:<10} {:<10}",
+            run.id, ts, run.command, duration, run.profile, branch, label
             &run.branch
         };
         println!(
