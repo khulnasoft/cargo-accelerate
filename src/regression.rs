@@ -5,7 +5,7 @@ use colored::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::BufWriter;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
@@ -92,11 +92,11 @@ pub fn run(options: CliOptions) -> Result<()> {
 }
 
 fn compare_with_baseline(
-    root: &PathBuf,
-    baseline_path: &PathBuf,
+    root: &Path,
+    baseline_path: &Path,
     options: &CliOptions,
     store: &mut TimingStore,
-    store_path: &PathBuf,
+    store_path: &Path,
 ) -> Result<()> {
     let baseline_content =
         fs::read_to_string(baseline_path).context("Failed to read baseline file")?;
@@ -106,8 +106,20 @@ fn compare_with_baseline(
     let current = measure_current_builds(root)?;
 
     // Record timings for historical tracking
-    timings::record_build_run(store, "build", std::time::Duration::from_secs_f64(current.build_time_secs), "regression", Some("regression-current"));
-    timings::record_build_run(store, "check", std::time::Duration::from_secs_f64(current.check_time_secs), "regression", Some("regression-estimated"));
+    timings::record_build_run(
+        store,
+        "build",
+        std::time::Duration::from_secs_f64(current.build_time_secs),
+        "regression",
+        Some("regression-current"),
+    );
+    timings::record_build_run(
+        store,
+        "check",
+        std::time::Duration::from_secs_f64(current.check_time_secs),
+        "regression",
+        Some("regression-estimated"),
+    );
     store.save(store_path)?;
 
     println!("\n{}", "Regression Report:".bold().yellow());
@@ -187,7 +199,7 @@ fn compare_with_baseline(
     Ok(())
 }
 
-fn measure_current_builds(root: &PathBuf) -> Result<BuildBaseline> {
+fn measure_current_builds(root: &Path) -> Result<BuildBaseline> {
     // build subsumes check, so only run build
     print!("  Measuring cargo build... ");
     let start = Instant::now();

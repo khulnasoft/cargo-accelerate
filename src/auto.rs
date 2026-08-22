@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use colored::*;
 use std::process::Command;
 
+#[derive(Default)]
 pub struct AutoConfig {
     pub skip_cache: bool,
     pub skip_linker: bool,
@@ -11,20 +12,6 @@ pub struct AutoConfig {
     pub skip_policy: bool,
     pub apply: bool,
     pub non_interactive: bool,
-}
-
-impl Default for AutoConfig {
-    fn default() -> Self {
-        Self {
-            skip_cache: false,
-            skip_linker: false,
-            skip_profile: false,
-            skip_ci: false,
-            skip_policy: false,
-            apply: false,
-            non_interactive: false,
-        }
-    }
 }
 
 pub fn run(config: AutoConfig) -> Result<()> {

@@ -90,8 +90,7 @@ pub fn run() -> Result<()> {
     if total_crates > 1 {
         println!("\n{}", "Slowest Bottleneck Crates:".bold().yellow());
         let slowest_count = std::cmp::min(3, crate_metrics.len());
-        for i in 0..slowest_count {
-            let m = &crate_metrics[i];
+        for (i, m) in crate_metrics.iter().take(slowest_count).enumerate() {
             println!(
                 "  {}. {} (approx. {:.1}s, {} lines of code)",
                 i + 1,
@@ -123,9 +122,7 @@ pub(crate) fn count_rust_loc(dir: &Path) -> Result<usize> {
     let mut total_lines = 0;
     for entry in WalkDir::new(dir)
         .into_iter()
-        .filter_entry(|e| {
-            e.file_name() != "target" && e.file_name() != ".git"
-        })
+        .filter_entry(|e| e.file_name() != "target" && e.file_name() != ".git")
         .filter_map(|e| e.ok())
     {
         let path = entry.path();

@@ -78,22 +78,33 @@ pub fn run() -> Result<()> {
             );
             recommendations.push(format!(
                 "Reduce `codegen-units` to at most {} (4× {} CPUs) in [profile.dev]",
-                cpus * 4, cpus
+                cpus * 4,
+                cpus
             ));
         } else if ratio < 0.5 && cu < 256 {
             println!(
                 "  {} codegen-units ({}) may underutilize {} CPU cores (ratio {:.1}×)",
-                "⚠".yellow(), cu, cpus, ratio
+                "⚠".yellow(),
+                cu,
+                cpus,
+                ratio
             );
             recommendations.push(format!(
                 "Increase `codegen-units` to {} (2× {} CPUs) in [profile.dev] for better parallelism",
                 (cpus * 2).min(256), cpus
             ));
         } else {
-            println!("  {} codegen-units is well-matched to CPU count", "✔".green());
+            println!(
+                "  {} codegen-units is well-matched to CPU count",
+                "✔".green()
+            );
         }
     } else if cpus < 64 {
-        println!("  {} codegen-units not set (defaults to 256, well-suited for {} cores)", "✔".green(), cpus);
+        println!(
+            "  {} codegen-units not set (defaults to 256, well-suited for {} cores)",
+            "✔".green(),
+            cpus
+        );
     } else {
         println!(
             "  {} codegen-units defaults to 256 — consider explicitly setting to {} (4× {} CPUs) to avoid overhead",
@@ -178,7 +189,7 @@ pub fn run() -> Result<()> {
     }
 
     // 7. Check policy file
-    let policy_paths = vec![
+    let policy_paths = [
         root.join(".cargo-accelerate").join("policy.toml"),
         root.join("accelerate-policy.toml"),
     ];

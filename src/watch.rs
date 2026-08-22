@@ -17,7 +17,7 @@ pub fn run() -> Result<()> {
     println!("  {} Prewarming build cache...", "➤".cyan());
     let warm_start = Instant::now();
     let warmup = Command::new("cargo")
-        .args(&["check", "--workspace"])
+        .args(["check", "--workspace"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
@@ -46,7 +46,7 @@ pub fn run() -> Result<()> {
     println!("  Watching for file changes... (Press Ctrl+C to stop)\n");
 
     let status = Command::new("cargo")
-        .args(&[
+        .args([
             "watch",
             "-q",
             "-c",

@@ -17,7 +17,10 @@ struct BenchmarkStats {
 pub fn run(incremental: bool) -> Result<()> {
     println!("{}", "Initiating Performance Benchmark...".bold().cyan());
     if incremental {
-        println!("  {}", "Incremental mode: measuring rebuild times without cargo clean".yellow());
+        println!(
+            "  {}",
+            "Incremental mode: measuring rebuild times without cargo clean".yellow()
+        );
     }
 
     let root = get_project_root().context("Could not find project root")?;
@@ -157,10 +160,34 @@ fn run_benchmark_sequence(
 }
 
 fn record_benchmark_timings(store: &mut TimingStore, stats: &BenchmarkStats, phase: &str) {
-    timings::record_build_run(store, "check", stats.check_time, "benchmark", Some(&format!("{}-check", phase)));
-    timings::record_build_run(store, "build", stats.build_time, "benchmark", Some(&format!("{}-build", phase)));
-    timings::record_build_run(store, "test", stats.test_time, "benchmark", Some(&format!("{}-test", phase)));
-    timings::record_build_run(store, "clippy", stats.clippy_time, "benchmark", Some(&format!("{}-clippy", phase)));
+    timings::record_build_run(
+        store,
+        "check",
+        stats.check_time,
+        "benchmark",
+        Some(&format!("{}-check", phase)),
+    );
+    timings::record_build_run(
+        store,
+        "build",
+        stats.build_time,
+        "benchmark",
+        Some(&format!("{}-build", phase)),
+    );
+    timings::record_build_run(
+        store,
+        "test",
+        stats.test_time,
+        "benchmark",
+        Some(&format!("{}-test", phase)),
+    );
+    timings::record_build_run(
+        store,
+        "clippy",
+        stats.clippy_time,
+        "benchmark",
+        Some(&format!("{}-clippy", phase)),
+    );
 }
 
 fn print_comparison(label: &str, before: Duration, after: Duration) {

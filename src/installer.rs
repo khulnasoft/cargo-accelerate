@@ -78,21 +78,16 @@ pub fn run() -> Result<()> {
         // Try OS package managers first for system-level tools like mold or lld
         if name == "mold" || name == "lld" || name == "lld-link" {
             match os {
-                "macos" => {
-                    if is_tool_installed("brew") {
-                        println!("  Attempting installation via Homebrew...");
-                        let pkg = if name == "mold" { "mold" } else { "llvm" };
-                        installed = run_command("brew", &["install", pkg]).is_ok();
-                    }
+                "macos" if is_tool_installed("brew") => {
+                    println!("  Attempting installation via Homebrew...");
+                    let pkg = if name == "mold" { "mold" } else { "llvm" };
+                    installed = run_command("brew", &["install", pkg]).is_ok();
                 }
-                "linux" => {
-                    if is_tool_installed("apt-get") {
-                        println!("  Attempting installation via apt-get...");
-                        let pkg = if name == "mold" { "mold" } else { "lld" };
-                        installed =
-                            run_command("sudo", &["apt-get", "install", "-y", pkg, "clang"])
-                                .is_ok();
-                    }
+                "linux" if is_tool_installed("apt-get") => {
+                    println!("  Attempting installation via apt-get...");
+                    let pkg = if name == "mold" { "mold" } else { "lld" };
+                    installed =
+                        run_command("sudo", &["apt-get", "install", "-y", pkg, "clang"]).is_ok();
                 }
                 _ => {}
             }

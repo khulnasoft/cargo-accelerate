@@ -194,7 +194,7 @@ fn parse_timings_json_dir(dir: &Path) -> Result<Vec<PerCrateTiming>> {
             duration_ms: v,
         })
         .collect();
-    aggregated.sort_by(|a, b| b.duration_ms.cmp(&a.duration_ms));
+    aggregated.sort_by_key(|t| std::cmp::Reverse(t.duration_ms));
     Ok(aggregated)
 }
 
@@ -499,10 +499,7 @@ fn build_gantt_json(phases: &HashMap<String, Duration>) -> String {
     format!("[{}]", entries.join(","))
 }
 
-fn build_flame_json(
-    per_crate: &[PerCrateTiming],
-    phases: &HashMap<String, Duration>,
-) -> String {
+fn build_flame_json(per_crate: &[PerCrateTiming], phases: &HashMap<String, Duration>) -> String {
     if !per_crate.is_empty() {
         // Build treemap hierarchy: root -> crate names
         let total_ms: u64 = per_crate.iter().map(|c| c.duration_ms).sum();
@@ -558,18 +555,19 @@ fn build_trend_json(trend: &HashMap<String, Vec<(u64, u64)>>) -> String {
             .map(|(ts, _)| chrono_like_timestamp_fmt(*ts, false))
             .collect();
         let y_vals: Vec<f64> = runs.iter().map(|(_, ms)| *ms as f64 / 1000.0).collect();
-        let x_json = serde_json::to_string(&x_vals).unwrap_or_default();
-        let y_json = serde_json::to_string(&y_vals).unwrap_or_default();
         let color = colors[i % colors.len()];
-        traces.push(serde_json::json!({
-            "type": "scatter",
-            "mode": "lines+markers",
-            "name": cmd,
-            "x": x_vals,
-            "y": y_vals,
-            "marker": { "color": color },
-            "line": { "color": color },
-        }).to_string());
+        traces.push(
+            serde_json::json!({
+                "type": "scatter",
+                "mode": "lines+markers",
+                "name": cmd,
+                "x": x_vals,
+                "y": y_vals,
+                "marker": { "color": color },
+                "line": { "color": color },
+            })
+            .to_string(),
+        );
     }
     format!(r#"{{"traces":[{}]}}"#, traces.join(","))
 }
@@ -645,8 +643,14 @@ mod tests {
     #[test]
     fn test_build_flame_json_per_crate() {
         let per_crate = vec![
-            PerCrateTiming { crate_name: "serde".into(), duration_ms: 3000 },
-            PerCrateTiming { crate_name: "tokio".into(), duration_ms: 5000 },
+            PerCrateTiming {
+                crate_name: "serde".into(),
+                duration_ms: 3000,
+            },
+            PerCrateTiming {
+                crate_name: "tokio".into(),
+                duration_ms: 5000,
+            },
         ];
         let phases = HashMap::new();
         let json = build_flame_json(&per_crate, &phases);
@@ -674,10 +678,7 @@ mod tests {
     #[test]
     fn test_build_trend_json_with_data() {
         let mut trend = HashMap::new();
-        trend.insert("build".into(), vec![
-            (1000000, 5000),
-            (1001000, 6000),
-        ]);
+        trend.insert("build".into(), vec![(1000000, 5000), (1001000, 6000)]);
         let json = build_trend_json(&trend);
         assert!(json.contains("build"));
         assert!(json.contains("5.0"));
@@ -698,9 +699,7 @@ mod tests {
 
     #[test]
     fn test_render_bottlenecks_html_with_data() {
-        let html = render_bottlenecks_html(&[
-            ("build".into(), "Over 60s".into()),
-        ]);
+        let html = render_bottlenecks_html(&[("build".into(), "Over 60s".into())]);
         assert!(html.contains("build"));
         assert!(html.contains("Over 60s"));
     }

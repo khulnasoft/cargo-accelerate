@@ -104,6 +104,21 @@ pub enum Commands {
         #[arg(long)]
         last: Option<usize>,
     },
+    /// Aggregate statistics over historical timing data
+    Stats {
+        /// Time window start: relative duration (e.g. 7d, 24h, 90m) or absolute unix timestamp
+        #[arg(long)]
+        since: Option<String>,
+        /// Filter by git branch
+        #[arg(long)]
+        branch: Option<String>,
+        /// Filter by profile name (dev, test, ci, release)
+        #[arg(long)]
+        profile: Option<String>,
+        /// Filter by label
+        #[arg(long)]
+        label: Option<String>,
+    },
     /// Comprehensive build audit (rustflags, features, size, parallelism)
     Audit {
         /// Skip binary size check
@@ -301,8 +316,8 @@ mod tests {
 
     #[test]
     fn test_parse_benchmark_incremental() {
-        let cli =
-            CargoCli::try_parse_from(["cargo", "accelerate", "benchmark", "--incremental"]).unwrap();
+        let cli = CargoCli::try_parse_from(["cargo", "accelerate", "benchmark", "--incremental"])
+            .unwrap();
         match cli {
             CargoCli::Accelerate(args) => match &args.command {
                 Commands::Benchmark { incremental } => assert!(*incremental),
@@ -681,6 +696,75 @@ mod tests {
     #[test]
     fn test_parse_unknown_command_fails() {
         let cli = CargoCli::try_parse_from(["cargo", "accelerate", "nonexistent"]);
+        assert!(cli.is_err());
+    }
+
+    #[test]
+    fn test_parse_stats_defaults_to_none() {
+        let cli = CargoCli::try_parse_from(["cargo", "accelerate", "stats"]).unwrap();
+        match cli {
+            CargoCli::Accelerate(args) => match &args.command {
+                Commands::Stats {
+                    since,
+                    branch,
+                    profile,
+                    label,
+                } => {
+                    assert!(since.is_none());
+                    assert!(branch.is_none());
+                    assert!(profile.is_none());
+                    assert!(label.is_none());
+                }
+                _ => panic!("expected Stats"),
+            },
+        }
+    }
+
+    #[test]
+    fn test_parse_stats_with_filters() {
+        let cli = CargoCli::try_parse_from([
+            "cargo",
+            "accelerate",
+            "stats",
+            "--since",
+            "7d",
+            "--branch",
+            "main",
+            "--profile",
+            "dev",
+            "--label",
+            "baseline",
+        ])
+        .unwrap();
+        match cli {
+            CargoCli::Accelerate(args) => match &args.command {
+                Commands::Stats {
+                    since,
+                    branch,
+                    profile,
+                    label,
+                } => {
+                    assert_eq!(since.as_deref(), Some("7d"));
+                    assert_eq!(branch.as_deref(), Some("main"));
+                    assert_eq!(profile.as_deref(), Some("dev"));
+                    assert_eq!(label.as_deref(), Some("baseline"));
+                }
+                _ => panic!("expected Stats"),
+            },
+        }
+    }
+
+    #[test]
+    fn test_parse_stats_rejects_duplicate_flags() {
+        let cli = CargoCli::try_parse_from([
+            "cargo",
+            "accelerate",
+            "stats",
+            "--since",
+            "1d",
+            "--since",
+            "2d",
+        ]);
         assert!(cli.is_err());
     }
 }

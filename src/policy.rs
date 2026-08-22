@@ -81,7 +81,7 @@ pub fn run() -> Result<()> {
     println!("{}", "Policy Enforcement...".bold().cyan());
 
     let root = get_project_root().context("Could not find project root")?;
-    let policy_paths = vec![
+    let policy_paths = [
         root.join(".cargo-accelerate").join("policy.toml"),
         root.join("accelerate-policy.toml"),
     ];

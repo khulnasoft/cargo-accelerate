@@ -99,8 +99,7 @@ pub fn run() -> Result<()> {
     );
 
     let max_display = std::cmp::min(20, metrics.len());
-    for i in 0..max_display {
-        let m = &metrics[i];
+    for m in metrics.iter().take(max_display) {
         let name_colored = if m.estimated_time > 8.0 {
             m.name.red()
         } else if m.estimated_time > 3.0 {

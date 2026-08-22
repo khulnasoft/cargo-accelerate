@@ -208,9 +208,7 @@ pub fn run(opts: CiOptions) -> Result<()> {
         "  {} Generated pre-commit hook: `.cargo-accelerate/pre-commit.sh`",
         "✔".green()
     );
-    println!(
-        "    Install: ln -sf ../../.cargo-accelerate/pre-commit.sh .git/hooks/pre-commit"
-    );
+    println!("    Install: ln -sf ../../.cargo-accelerate/pre-commit.sh .git/hooks/pre-commit");
 
     // 4. CI Parity Check
     println!("\n{}", "CI Parity Check:".bold().yellow());
@@ -228,7 +226,10 @@ pub fn run(opts: CiOptions) -> Result<()> {
 fn validate_budget(budget: Option<f64>) -> Result<()> {
     if let Some(b) = budget {
         if !b.is_finite() || b <= 0.0 {
-            anyhow::bail!("CI regression budget must be a finite number greater than 0 (got {})", b);
+            anyhow::bail!(
+                "CI regression budget must be a finite number greater than 0 (got {})",
+                b
+            );
         }
     }
     Ok(())
@@ -245,7 +246,8 @@ fn build_workflow(enforce_policy: bool, budget: Option<f64>) -> String {
 
         if enforce_policy {
             // When enforcing policy, regression check must fail on breach
-            let enforced = regression_job.replace("continue-on-error: true", "continue-on-error: false");
+            let enforced =
+                regression_job.replace("continue-on-error: true", "continue-on-error: false");
             workflow.push_str(&enforced);
         } else {
             workflow.push_str(&regression_job);
@@ -253,7 +255,7 @@ fn build_workflow(enforce_policy: bool, budget: Option<f64>) -> String {
     }
 
     if enforce_policy {
-        workflow.push_str("\n");
+        workflow.push('\n');
         workflow.push_str(POLICY_CHECK_JOB);
     }
 

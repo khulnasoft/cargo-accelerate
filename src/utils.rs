@@ -40,12 +40,9 @@ pub fn get_cached_metadata_with_deps() -> Result<&'static cargo_metadata::Metada
 
 /// Returns workspace metadata for the given root, running `cargo metadata` in
 /// that directory and caching the result keyed by root path.
-pub fn get_cached_metadata_for_root(
-    root: &Path,
-) -> Result<&'static cargo_metadata::Metadata> {
-    static METADATA_BY_ROOT: OnceLock<
-        Mutex<HashMap<PathBuf, &'static cargo_metadata::Metadata>>,
-    > = OnceLock::new();
+pub fn get_cached_metadata_for_root(root: &Path) -> Result<&'static cargo_metadata::Metadata> {
+    static METADATA_BY_ROOT: OnceLock<Mutex<HashMap<PathBuf, &'static cargo_metadata::Metadata>>> =
+        OnceLock::new();
     let map = METADATA_BY_ROOT.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = map.lock().expect("metadata cache lock poisoned");
     let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
