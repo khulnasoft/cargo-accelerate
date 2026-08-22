@@ -125,8 +125,11 @@ pub fn get_git_branch(root: &Path) -> String {
         .output()
         .ok();
     match output {
-        Some(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        None => "unknown".into(),
+        Some(o) if o.status.success() => {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.is_empty() { "unknown".into() } else { s }
+        }
+        _ => "unknown".into(),
     }
 }
 
@@ -137,8 +140,11 @@ pub fn get_git_commit_hash(root: &Path) -> String {
         .output()
         .ok();
     match output {
-        Some(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        None => "unknown".into(),
+        Some(o) if o.status.success() => {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.is_empty() { "unknown".into() } else { s }
+        }
+        _ => "unknown".into(),
     }
 }
 
