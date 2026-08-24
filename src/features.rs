@@ -7,7 +7,6 @@ use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
 
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FeatureSuggestion {
     pub package_name: String,
@@ -50,7 +49,10 @@ fn known_feature_suggestions() -> &'static HashMap<&'static str, &'static [&'sta
 }
 
 fn default_feature_count(suggested: &[&str], defaults: &[String]) -> usize {
-    suggested.iter().filter(|s| defaults.contains(&s.to_string())).count()
+    suggested
+        .iter()
+        .filter(|s| defaults.contains(&s.to_string()))
+        .count()
 }
 
 pub fn analyze_features(root: &Path) -> Result<FeatureAudit> {
@@ -65,11 +67,7 @@ pub fn analyze_features(root: &Path) -> Result<FeatureAudit> {
     let direct_deps = parsed
         .get("dependencies")
         .and_then(|d| d.as_table())
-        .map(|t| {
-            t.iter()
-                .map(|(k, _)| k.clone())
-                .collect::<Vec<_>>()
-        })
+        .map(|t| t.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>())
         .unwrap_or_default();
 
     if direct_deps.is_empty() {
@@ -100,14 +98,15 @@ pub fn analyze_features(root: &Path) -> Result<FeatureAudit> {
             .and_then(|d| d.get(dep_name))
             .and_then(|d| d.get("features"))
             .and_then(|f| f.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
 
-        let default_feature_list: Vec<String> = package
-            .features
-            .get("default")
-            .map(|f| f.clone())
-            .unwrap_or_default();
+        let default_feature_list: Vec<String> =
+            package.features.get("default").cloned().unwrap_or_default();
 
         let known_suggestion = known.get(dep_name.as_str());
 
@@ -224,7 +223,10 @@ pub fn optimize_dependencies(root: &Path, audit: &FeatureAudit) -> Result<()> {
                 let mut inline = toml_edit::InlineTable::new();
                 inline.insert("version", toml_edit::Value::from(version));
                 inline.insert("default-features", toml_edit::Value::from(false));
-                inline.insert("features", toml_edit::Value::from(make_features_array(&suggestion.recommended_features)));
+                inline.insert(
+                    "features",
+                    toml_edit::Value::from(make_features_array(&suggestion.recommended_features)),
+                );
                 *dep = toml_edit::Item::Value(toml_edit::Value::InlineTable(inline));
                 optimized_count += 1;
                 continue;
@@ -232,11 +234,17 @@ pub fn optimize_dependencies(root: &Path, audit: &FeatureAudit) -> Result<()> {
 
             if let Some(table) = dep.as_table_mut() {
                 table.insert("default-features", toml_edit::value(false));
-                table.insert("features", toml_edit::value(make_features_array(&suggestion.recommended_features)));
+                table.insert(
+                    "features",
+                    toml_edit::value(make_features_array(&suggestion.recommended_features)),
+                );
                 optimized_count += 1;
             } else if let Some(inline) = dep.as_inline_table_mut() {
                 inline.insert("default-features", toml_edit::Value::from(false));
-                inline.insert("features", toml_edit::Value::from(make_features_array(&suggestion.recommended_features)));
+                inline.insert(
+                    "features",
+                    toml_edit::Value::from(make_features_array(&suggestion.recommended_features)),
+                );
                 optimized_count += 1;
             }
         }
@@ -333,17 +341,10 @@ pub fn run(options: FeaturesOptions) -> Result<()> {
             "\n{} {} dependenc{} can be optimized. Run with --optimize to apply.",
             "⚠".yellow(),
             needs_optimization,
-            if needs_optimization == 1 {
-                "y"
-            } else {
-                "ies"
-            }
+            if needs_optimization == 1 { "y" } else { "ies" }
         );
     } else {
-        println!(
-            "\n{} All dependencies are already optimized!",
-            "✔".green()
-        );
+        println!("\n{} All dependencies are already optimized!", "✔".green());
     }
 
     save_suggestions(&root, &audit)?;

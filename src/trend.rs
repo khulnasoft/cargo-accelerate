@@ -99,8 +99,20 @@ pub fn run() -> Result<()> {
     let build_time = measure_cmd(&root, "build")?;
 
     // Record in unified timings store
-    timings::record_build_run(&mut store, "check", check_time, "trend", Some("trend-check"));
-    timings::record_build_run(&mut store, "build", build_time, "trend", Some("trend-build"));
+    timings::record_build_run(
+        &mut store,
+        "check",
+        check_time,
+        "trend",
+        Some("trend-check"),
+    );
+    timings::record_build_run(
+        &mut store,
+        "build",
+        build_time,
+        "trend",
+        Some("trend-build"),
+    );
     store.save(&store_path)?;
 
     let rustc_version = get_rustc_version();
@@ -272,7 +284,7 @@ mod tests {
     #[test]
     fn test_trend_direction_degrading() {
         let mut history = TrendHistory::default();
-        let values = vec![20.0, 22.0, 25.0, 28.0, 32.0];
+        let values = [20.0, 22.0, 25.0, 28.0, 32.0];
         for (i, v) in values.iter().enumerate() {
             history.add_record(BuildRecord {
                 timestamp: i as u64,

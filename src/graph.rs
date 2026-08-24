@@ -122,14 +122,14 @@ pub fn run() -> Result<()> {
 
     // Cross-crate split suggestions
     let root = get_project_root().context("Could not find project root")?;
-    let split_report = suggest_crate_splits(&metadata, &edges, &root)?;
+    let split_report = suggest_crate_splits(metadata, &edges, &root)?;
     print_split_suggestions(&split_report);
     save_split_report(&root, &split_report)?;
 
     Ok(())
 }
 
-fn update_fan_metrics(crates: &mut Vec<CrateNode>, edges: &[Edge]) {
+fn update_fan_metrics(crates: &mut [CrateNode], edges: &[Edge]) {
     let name_to_fan: Vec<(String, usize, usize)> = {
         let names: HashSet<&str> = crates.iter().map(|c| c.name.as_str()).collect();
         crates
@@ -204,7 +204,7 @@ fn print_partitioning_candidates(crates: &[CrateNode], edges: &[Edge]) {
         .filter(|c| c.fan_out >= 5)
         .map(|c| (c.name.as_str(), c.fan_out))
         .collect();
-    high_own_deps.sort_by(|a, b| b.1.cmp(&a.1));
+    high_own_deps.sort_by_key(|x| std::cmp::Reverse(x.1));
 
     if !high_own_deps.is_empty() {
         println!("\n{}", "Workspace Partitioning Candidates:".bold().yellow());
@@ -391,9 +391,7 @@ pub struct SplitReport {
     pub suggestions: Vec<SplitSuggestion>,
 }
 
-fn find_workspace_member_dirs<'a>(
-    metadata: &'a cargo_metadata::Metadata,
-) -> Vec<(&'a str, &'a Path)> {
+fn find_workspace_member_dirs(metadata: &cargo_metadata::Metadata) -> Vec<(&str, &Path)> {
     metadata
         .packages
         .iter()
@@ -478,7 +476,11 @@ fn suggest_crate_splits(
         };
 
         let reason = if is_large {
-            format!("Large crate ({} LoC) — splitting into {} would reduce per-change rebuild scope", loc, proposed_modules.join(", "))
+            format!(
+                "Large crate ({} LoC) — splitting into {} would reduce per-change rebuild scope",
+                loc,
+                proposed_modules.join(", ")
+            )
         } else if is_wide {
             format!("Wide crate ({} LoC, {} external deps) — low external dependency density ({:.1}/kLoC) suggests self-contained logic that can be modularized", loc, external_dep_count, external_dep_ratio)
         } else {
@@ -540,7 +542,11 @@ fn save_split_report(root: &Path, report: &SplitReport) -> Result<()> {
 
     let toml_str = toml::to_string(report)?;
     fs::write(&path, toml_str)?;
-    println!("  {} Split suggestions saved to {}", "✔".green(), path.display());
+    println!(
+        "  {} Split suggestions saved to {}",
+        "✔".green(),
+        path.display()
+    );
     Ok(())
 }
 
@@ -557,9 +563,7 @@ fn print_split_suggestions(report: &SplitReport) {
         "\n{}",
         "Cross-Crate Optimization Suggestions:".bold().yellow()
     );
-    println!(
-        "  The following workspace members may benefit from splitting:"
-    );
+    println!("  The following workspace members may benefit from splitting:");
 
     for s in &report.suggestions {
         println!();
@@ -579,9 +583,7 @@ fn print_split_suggestions(report: &SplitReport) {
             "  └ Estimated savings: ~{:.0}% on rebuilds of affected modules",
             s.estimated_savings_pct
         );
-        println!(
-            "    → See .cargo-accelerate/splits.toml for suggested Cargo.toml changes"
-        );
+        println!("    → See .cargo-accelerate/splits.toml for suggested Cargo.toml changes");
     }
 }
 
@@ -734,9 +736,11 @@ mod tests {
                 },
             ],
         };
-        report
-            .suggestions
-            .sort_by(|a, b| b.estimated_savings_pct.partial_cmp(&a.estimated_savings_pct).unwrap());
+        report.suggestions.sort_by(|a, b| {
+            b.estimated_savings_pct
+                .partial_cmp(&a.estimated_savings_pct)
+                .unwrap()
+        });
         assert_eq!(report.suggestions[0].crate_name, "A");
         assert_eq!(report.suggestions[1].crate_name, "B");
     }

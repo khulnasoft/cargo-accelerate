@@ -1,5 +1,5 @@
-use crate::cli::CacheAction;
 use crate::ci::CiOptions;
+use crate::cli::CacheAction;
 use crate::profile::{self, Scenario};
 use crate::utils::{get_cargo_config_path, get_cargo_toml_path, get_project_root};
 use anyhow::{Context, Result};

@@ -87,26 +87,29 @@ impl TimingStore {
     }
 
     pub fn median_duration_ms(&self, command: &str) -> Option<f64> {
-        let mut times: Vec<f64> = self
-            .runs
-            .iter()
-            .filter(|r| r.command == command)
-            .map(|r| r.duration_ms as f64)
-            .collect();
+        Self::median_over(&self.query_by_command(command))
+    }
+
+    pub fn avg_duration_ms(&self, command: &str) -> Option<f64> {
+        Self::avg_over(&self.query_by_command(command))
+    }
+
+    pub fn median_over(runs: &[&BuildRun]) -> Option<f64> {
+        let mut times: Vec<f64> = runs.iter().map(|r| r.duration_ms as f64).collect();
         if times.is_empty() {
             return None;
         }
         times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        Some(times[times.len() / 2])
+        let mid = times.len() / 2;
+        Some(if times.len().is_multiple_of(2) {
+            (times[mid - 1] + times[mid]) / 2.0
+        } else {
+            times[mid]
+        })
     }
 
-    pub fn avg_duration_ms(&self, command: &str) -> Option<f64> {
-        let times: Vec<f64> = self
-            .runs
-            .iter()
-            .filter(|r| r.command == command)
-            .map(|r| r.duration_ms as f64)
-            .collect();
+    pub fn avg_over(runs: &[&BuildRun]) -> Option<f64> {
+        let times: Vec<f64> = runs.iter().map(|r| r.duration_ms as f64).collect();
         if times.is_empty() {
             return None;
         }
@@ -127,7 +130,11 @@ pub fn get_git_branch(root: &Path) -> String {
     match output {
         Some(o) if o.status.success() => {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() { "unknown".into() } else { s }
+            if s.is_empty() {
+                "unknown".into()
+            } else {
+                s
+            }
         }
         _ => "unknown".into(),
     }
@@ -142,7 +149,11 @@ pub fn get_git_commit_hash(root: &Path) -> String {
     match output {
         Some(o) if o.status.success() => {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() { "unknown".into() } else { s }
+            if s.is_empty() {
+                "unknown".into()
+            } else {
+                s
+            }
         }
         _ => "unknown".into(),
     }
@@ -244,6 +255,220 @@ pub struct ListArgs {
     pub last: Option<usize>,
 }
 
+#[derive(Debug, PartialEq)]
+pub struct CommandStats {
+    pub command: String,
+    pub count: usize,
+    pub median_ms: Option<f64>,
+    pub avg_ms: Option<f64>,
+    pub min_ms: Option<u64>,
+    pub max_ms: Option<u64>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct StatsSummary {
+    pub matching_runs: usize,
+    pub commands: Vec<CommandStats>,
+}
+
+impl StatsSummary {
+    /// Aggregate a (possibly filtered) set of runs per command.
+    pub fn compute(runs: &[&BuildRun]) -> Self {
+        let mut names: Vec<&str> = runs.iter().map(|r| r.command.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+
+        let mut commands: Vec<CommandStats> = Vec::new();
+        for name in names {
+            let group: Vec<&BuildRun> =
+                runs.iter().filter(|r| r.command == name).copied().collect();
+            let durations: Vec<u64> = group.iter().map(|r| r.duration_ms).collect();
+            commands.push(CommandStats {
+                count: durations.len(),
+                command: name.to_string(),
+                median_ms: TimingStore::median_over(&group),
+                avg_ms: TimingStore::avg_over(&group),
+                min_ms: durations.iter().min().copied(),
+                max_ms: durations.iter().max().copied(),
+            });
+        }
+        StatsSummary {
+            matching_runs: runs.len(),
+            commands,
+        }
+    }
+}
+
+/// Parse a `--since` value: either a relative duration (`7d`, `24h`, `90m`,
+/// `30s`) measured backwards from `now`, or an absolute unix timestamp.
+pub fn parse_since(spec: &str, now: u64) -> Option<u64> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return None;
+    }
+    let (value_str, multiplier_secs) = if let Some(rest) = spec.strip_suffix('d') {
+        (rest, 86_400u64)
+    } else if let Some(rest) = spec.strip_suffix('h') {
+        (rest, 3_600)
+    } else if let Some(rest) = spec.strip_suffix('m') {
+        (rest, 60)
+    } else if let Some(rest) = spec.strip_suffix('s') {
+        (rest, 1)
+    } else {
+        return spec.parse::<u64>().ok();
+    };
+    let value: f64 = value_str.trim().parse().ok()?;
+    if value < 0.0 || !value.is_finite() {
+        return None;
+    }
+    let delta = (value * multiplier_secs as f64).round() as u64;
+    Some(now.saturating_sub(delta))
+}
+
+/// Intersect filter results so multiple criteria AND together.
+fn apply_filters<'a>(
+    store: &'a TimingStore,
+    branch: Option<&str>,
+    profile: Option<&str>,
+    label: Option<&str>,
+    since: Option<u64>,
+) -> Vec<&'a BuildRun> {
+    let mut selected: Option<Vec<&BuildRun>> = None;
+    {
+        let mut intersect = |next: Vec<&'a BuildRun>| {
+            if let Some(prev) = selected.as_mut() {
+                prev.retain(|r| next.iter().any(|n| n.id == r.id));
+            } else {
+                selected = Some(next);
+            }
+        };
+        if let Some(b) = branch {
+            intersect(store.query_by_branch(b));
+        }
+        if let Some(p) = profile {
+            intersect(store.query_by_profile(p));
+        }
+        if let Some(l) = label {
+            intersect(store.query_by_label(l));
+        }
+        if let Some(ts) = since {
+            intersect(store.query_since(ts));
+        }
+    }
+    selected.unwrap_or_else(|| store.runs.iter().collect())
+}
+
+fn format_duration_f64(ms: f64) -> String {
+    if ms >= 60_000.0 {
+        format!("{:.1}m", ms / 60_000.0)
+    } else if ms >= 1_000.0 {
+        format!("{:.1}s", ms / 1_000.0)
+    } else {
+        format!("{:.0}ms", ms)
+    }
+}
+
+pub struct StatsArgs {
+    pub since: Option<String>,
+    pub branch: Option<String>,
+    pub profile: Option<String>,
+    pub label: Option<String>,
+}
+
+pub fn run_stats(args: StatsArgs) -> Result<()> {
+    let root = crate::utils::get_project_root().context("Could not find project root")?;
+    let store_path = get_store_path(&root);
+    let store = TimingStore::load(&store_path)?;
+
+    if store.total_count() == 0 {
+        println!("  No timing records found.");
+        println!(
+            "  Run {} first to collect data.",
+            "cargo accelerate benchmark".bold()
+        );
+        return Ok(());
+    }
+
+    let now = get_current_timestamp();
+    let since = match &args.since {
+        Some(spec) => Some(parse_since(spec, now).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Invalid --since value '{}'. Use a relative duration (e.g. 7d, 24h, 90m) or an absolute unix timestamp.",
+                spec
+            )
+        })?),
+        None => None,
+    };
+
+    let runs = apply_filters(
+        &store,
+        args.branch.as_deref(),
+        args.profile.as_deref(),
+        args.label.as_deref(),
+        since,
+    );
+
+    println!("{}", "Timing Statistics".bold());
+    println!("Total recorded runs: {}", store.total_count());
+
+    if runs.is_empty() {
+        println!("No runs match the given filters.");
+        return Ok(());
+    }
+
+    let summary = StatsSummary::compute(&runs);
+    println!("Matching runs:       {}", summary.matching_runs);
+    println!();
+    println!(
+        "{:<12} {:>8} {:>12} {:>12} {:>12} {:>12}",
+        "Command".bold(),
+        "Count".bold(),
+        "Median".bold(),
+        "Average".bold(),
+        "Min".bold(),
+        "Max".bold()
+    );
+    println!("{}", "-".repeat(72).cyan());
+
+    for cs in &summary.commands {
+        let fmt_opt = |v: Option<f64>| v.map(format_duration_f64).unwrap_or_else(|| "-".into());
+        println!(
+            "{:<12} {:>8} {:>12} {:>12} {:>12} {:>12}",
+            cs.command,
+            cs.count,
+            fmt_opt(cs.median_ms),
+            fmt_opt(cs.avg_ms),
+            cs.min_ms.map(format_duration).unwrap_or_else(|| "-".into()),
+            cs.max_ms.map(format_duration).unwrap_or_else(|| "-".into()),
+        );
+    }
+
+    let has_filters =
+        args.branch.is_some() || args.profile.is_some() || args.label.is_some() || since.is_some();
+    if has_filters {
+        let mut all_names: Vec<&str> = store.runs.iter().map(|r| r.command.as_str()).collect();
+        all_names.sort_unstable();
+        all_names.dedup();
+        println!("\n{}", "All-time (unfiltered)".bold());
+        for name in all_names {
+            println!(
+                "{:<12} median {:>10} avg {:>10}",
+                name,
+                store
+                    .median_duration_ms(name)
+                    .map(format_duration_f64)
+                    .unwrap_or_else(|| "-".into()),
+                store
+                    .avg_duration_ms(name)
+                    .map(format_duration_f64)
+                    .unwrap_or_else(|| "-".into()),
+            );
+        }
+    }
+
+    Ok(())
+}
+
 pub fn chrono_like_timestamp(unix_ts: u64) -> String {
     chrono_like_timestamp_fmt(unix_ts, true)
 }
@@ -272,7 +497,11 @@ pub fn time_to_datetime(secs: i64, _nanos: u32) -> (i32, u32, u32, u32, u32, u32
     let n = if s < 0 {
         days -= 1;
         let rem = s % 86400;
-        if rem < 0 { rem + 86400 } else { rem }
+        if rem < 0 {
+            rem + 86400
+        } else {
+            rem
+        }
     } else {
         s % 86400
     };
@@ -385,7 +614,11 @@ mod tests {
             let run = BuildRun {
                 id: i,
                 timestamp: 1000 + i,
-                command: if i % 2 == 0 { "build".into() } else { "test".into() },
+                command: if i % 2 == 0 {
+                    "build".into()
+                } else {
+                    "test".into()
+                },
                 duration_ms: 1000 * (i + 1),
                 profile: "dev".into(),
                 branch: "main".into(),
@@ -644,7 +877,13 @@ mod tests {
         assert_eq!(store.runs[0].profile, "release");
         assert_eq!(store.runs[0].label.as_deref(), Some("test-run"));
 
-        record_build_run(&mut store, "check", Duration::from_millis(1200), "dev", None);
+        record_build_run(
+            &mut store,
+            "check",
+            Duration::from_millis(1200),
+            "dev",
+            None,
+        );
         assert_eq!(store.runs.len(), 2);
         assert_eq!(store.runs[1].command, "check");
         assert_eq!(store.runs[1].label, None);
@@ -675,5 +914,164 @@ mod tests {
         assert!(!is_leap(1900));
         assert!(!is_leap(2023));
         assert!(is_leap(2024));
+    }
+
+    fn run(id: u64, command: &str, duration_ms: u64, branch: &str, ts: u64) -> BuildRun {
+        BuildRun {
+            id,
+            timestamp: ts,
+            command: command.into(),
+            duration_ms,
+            profile: "dev".into(),
+            branch: branch.into(),
+            commit_hash: "abc".into(),
+            label: None,
+        }
+    }
+
+    #[test]
+    fn test_parse_since_relative_units() {
+        let now: u64 = 1_000_000;
+        assert_eq!(parse_since("7d", now), Some(now - 7 * 86_400));
+        assert_eq!(parse_since("24h", now), Some(now - 24 * 3_600));
+        assert_eq!(parse_since("90m", now), Some(now - 90 * 60));
+        assert_eq!(parse_since("30s", now), Some(now - 30));
+
+        // Whitespace and fractional values are tolerated
+        assert_eq!(parse_since(" 1.5h ", now), Some(now - 5_400));
+    }
+
+    #[test]
+    fn test_parse_since_absolute_timestamp() {
+        let now = 1_000_000;
+        assert_eq!(parse_since("500000", now), Some(500_000));
+        // Future absolute timestamps are preserved as-is
+        assert_eq!(parse_since("2000000", now), Some(2_000_000));
+    }
+
+    #[test]
+    fn test_parse_since_invalid() {
+        let now = 1_000_000;
+        assert_eq!(parse_since("", now), None);
+        assert_eq!(parse_since("   ", now), None);
+        assert_eq!(parse_since("abc", now), None);
+        assert_eq!(parse_since("-5d", now), None);
+        assert_eq!(parse_since("12x", now), None);
+    }
+
+    #[test]
+    fn test_median_and_avg_over_match_instance_methods() {
+        let mut store = TimingStore::default();
+        store.record(run(0, "build", 1000, "main", 1000));
+        store.record(run(1, "build", 3000, "main", 1001));
+        store.record(run(2, "build", 2000, "feature", 1002));
+
+        let all_builds = store.query_by_command("build");
+        assert_eq!(
+            TimingStore::median_over(&all_builds),
+            store.median_duration_ms("build")
+        );
+        assert_eq!(
+            TimingStore::avg_over(&all_builds),
+            store.avg_duration_ms("build")
+        );
+        assert!(TimingStore::median_over(&[]).is_none());
+        assert!(TimingStore::avg_over(&[]).is_none());
+    }
+
+    #[test]
+    fn test_apply_filters_single_criteria() {
+        let mut store = TimingStore::default();
+        store.record(run(0, "build", 1000, "main", 1000));
+        store.record(run(1, "check", 2000, "main", 1005));
+        store.record(run(2, "build", 3000, "feature", 1010));
+        store.record(run(3, "test", 4000, "main", 1100));
+
+        assert_eq!(
+            apply_filters(&store, Some("main"), None, None, None).len(),
+            3
+        );
+        assert_eq!(apply_filters(&store, None, None, None, Some(1006)).len(), 2);
+        // No filters returns everything
+        assert_eq!(apply_filters(&store, None, None, None, None).len(), 4);
+    }
+
+    #[test]
+    fn test_apply_filters_intersects_criteria() {
+        let mut store = TimingStore::default();
+        store.record(run(0, "build", 1000, "main", 1000));
+        store.record(run(1, "build", 3000, "feature", 1005));
+        store.record(run(2, "build", 5000, "main", 1200));
+
+        // main AND since=1100 -> only id 2
+        let filtered = apply_filters(&store, Some("main"), None, None, Some(1100));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, 2);
+
+        // Disjoint filters yield nothing
+        assert!(apply_filters(&store, Some("main"), None, None, Some(9_999_999)).is_empty());
+    }
+
+    #[test]
+    fn test_apply_filters_by_profile_and_label() {
+        let mut store = TimingStore::default();
+        let mut r = run(0, "build", 1000, "main", 1000);
+        r.profile = "ci".into();
+        r.label = Some("baseline".into());
+        store.record(r);
+        store.record(run(1, "build", 2000, "main", 1001));
+
+        assert_eq!(apply_filters(&store, None, Some("ci"), None, None).len(), 1);
+        assert_eq!(
+            apply_filters(&store, None, None, Some("baseline"), None).len(),
+            1
+        );
+        // Combined profile + label still matches the same single run
+        assert_eq!(
+            apply_filters(&store, None, Some("ci"), Some("baseline"), None).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_stats_summary_compute_groups_per_command() {
+        let mut store = TimingStore::default();
+        store.record(run(0, "build", 1000, "main", 1000));
+        store.record(run(1, "build", 3000, "main", 1001));
+        store.record(run(2, "check", 250, "main", 1002));
+
+        let runs = store.runs.iter().collect::<Vec<_>>();
+        let summary = StatsSummary::compute(&runs);
+
+        assert_eq!(summary.matching_runs, 3);
+        assert_eq!(summary.commands.len(), 2);
+
+        // Commands sorted alphabetically
+        assert_eq!(summary.commands[0].command, "build");
+        assert_eq!(summary.commands[0].count, 2);
+        assert_eq!(summary.commands[0].min_ms, Some(1000));
+        assert_eq!(summary.commands[0].max_ms, Some(3000));
+        assert!((summary.commands[0].median_ms.unwrap() - 2000.0).abs() < 1.0);
+        assert!((summary.commands[0].avg_ms.unwrap() - 2000.0).abs() < 1.0);
+
+        assert_eq!(summary.commands[1].command, "check");
+        assert_eq!(summary.commands[1].count, 1);
+        assert_eq!(summary.commands[1].min_ms, Some(250));
+    }
+
+    #[test]
+    fn test_stats_summary_empty() {
+        let summary = StatsSummary::compute(&[]);
+        assert_eq!(summary.matching_runs, 0);
+        assert!(summary.commands.is_empty());
+    }
+
+    #[test]
+    fn test_format_duration_f64() {
+        assert_eq!(format_duration_f64(500.0), "500ms");
+        assert_eq!(format_duration_f64(1500.4), "1.5s");
+        assert_eq!(format_duration_f64(1500.0), "1.5s");
+        assert_eq!(format_duration_f64(45_999.0), "46.0s");
+        assert_eq!(format_duration_f64(125_000.0), "2.1m");
     }
 }

@@ -193,7 +193,9 @@ fn check_parallel_build(root: &Path, issues: &mut Vec<String>) -> Result<u32> {
             } else if cu >= suggested_dev_codegen {
                 println!(
                     "  ✔ codegen-units = {} (well-matched to {} CPU cores, ratio {:.1}×)",
-                    cu, cpus, cu as f64 / cpus as f64
+                    cu,
+                    cpus,
+                    cu as f64 / cpus as f64
                 );
                 score += 1;
             } else {
@@ -234,7 +236,10 @@ fn check_parallel_build(root: &Path, issues: &mut Vec<String>) -> Result<u32> {
         }
     }
 
-    println!("  Available CPU cores: {} (suggested dev codegen-units: {})", cpus, suggested_dev_codegen);
+    println!(
+        "  Available CPU cores: {} (suggested dev codegen-units: {})",
+        cpus, suggested_dev_codegen
+    );
     println!("  Parallelism ratio: codegen-units should be 1–2× CPUs for dev, 1 for CI/release");
 
     Ok(score)
@@ -404,7 +409,11 @@ mod tests {
         assert_eq!(result, 0);
         assert!(!issues.is_empty());
         let has_overhead_warning = issues.iter().any(|i| i.contains("4 ×"));
-        assert!(has_overhead_warning, "expected overhead warning, got: {:?}", issues);
+        assert!(
+            has_overhead_warning,
+            "expected overhead warning, got: {:?}",
+            issues
+        );
     }
 
     #[test]

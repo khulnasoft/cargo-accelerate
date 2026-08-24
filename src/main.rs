@@ -84,15 +84,23 @@ fn main() -> anyhow::Result<()> {
         Commands::Trend => {
             trend::run()?;
         }
-        Commands::Timings {
-            command,
-            last,
-        } => {
-            let opts = timings::ListArgs {
-                command,
-                last,
-            };
+        Commands::Timings { command, last } => {
+            let opts = timings::ListArgs { command, last };
             timings::run_list(opts)?;
+        }
+        Commands::Stats {
+            since,
+            branch,
+            profile,
+            label,
+        } => {
+            let opts = timings::StatsArgs {
+                since,
+                branch,
+                profile,
+                label,
+            };
+            timings::run_stats(opts)?;
         }
         Commands::Audit {
             skip_size,

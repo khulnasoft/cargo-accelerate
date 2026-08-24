@@ -1,4 +1,4 @@
-use crate::utils::{get_os, is_tool_installed};
+use crate::utils::{get_os, is_tool_installed, preferred_linker_for};
 use anyhow::{Context, Result};
 use colored::*;
 use std::process::Command;
@@ -7,12 +7,7 @@ pub fn run() -> Result<()> {
     println!("{}", "Running Cargo Accelerate Installer...".bold().cyan());
 
     let os = get_os();
-    let preferred_linker = match os {
-        "linux" => "mold",
-        "macos" => "lld",
-        "windows" => "lld-link",
-        _ => "lld",
-    };
+    let preferred_linker = preferred_linker_for(os);
 
     let tools = vec![
         (
@@ -78,21 +73,16 @@ pub fn run() -> Result<()> {
         // Try OS package managers first for system-level tools like mold or lld
         if name == "mold" || name == "lld" || name == "lld-link" {
             match os {
-                "macos" => {
-                    if is_tool_installed("brew") {
-                        println!("  Attempting installation via Homebrew...");
-                        let pkg = if name == "mold" { "mold" } else { "llvm" };
-                        installed = run_command("brew", &["install", pkg]).is_ok();
-                    }
+                "macos" if is_tool_installed("brew") => {
+                    println!("  Attempting installation via Homebrew...");
+                    let pkg = if name == "mold" { "mold" } else { "llvm" };
+                    installed = run_command("brew", &["install", pkg]).is_ok();
                 }
-                "linux" => {
-                    if is_tool_installed("apt-get") {
-                        println!("  Attempting installation via apt-get...");
-                        let pkg = if name == "mold" { "mold" } else { "lld" };
-                        installed =
-                            run_command("sudo", &["apt-get", "install", "-y", pkg, "clang"])
-                                .is_ok();
-                    }
+                "linux" if is_tool_installed("apt-get") => {
+                    println!("  Attempting installation via apt-get...");
+                    let pkg = if name == "mold" { "mold" } else { "lld" };
+                    installed =
+                        run_command("sudo", &["apt-get", "install", "-y", pkg, "clang"]).is_ok();
                 }
                 _ => {}
             }
@@ -123,13 +113,20 @@ pub fn run() -> Result<()> {
 }
 
 fn install_tool_via_cargo(name: &str) -> Result<()> {
-    let mut args = vec!["install"];
-    // cargo-nextest refuses to compile without --locked
+    let args = install_args(name);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_command("cargo", &refs)
+}
+
+/// Build `cargo install` arguments; cargo-nextest refuses to compile
+/// without `--locked`.
+fn install_args(name: &str) -> Vec<String> {
+    let mut args: Vec<String> = vec!["install".to_string()];
     if name == "cargo-nextest" {
-        args.push("--locked");
+        args.push("--locked".to_string());
     }
-    args.push(name);
-    run_command("cargo", &args)
+    args.push(name.to_string());
+    args
 }
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
@@ -143,5 +140,49 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
         Ok(())
     } else {
         anyhow::bail!("Command failed with exit code: {:?}", status.code())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::is_tool_installed;
+
+    #[test]
+    fn test_install_args_nextest_gets_locked() {
+        assert_eq!(
+            install_args("cargo-nextest"),
+            ["install", "--locked", "cargo-nextest"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_install_args_plain_crate() {
+        for name in ["sccache", "cargo-watch", "cargo-chef"] {
+            let args = install_args(name);
+            assert_eq!(args.len(), 2);
+            assert_eq!(args[0], "install");
+            assert_eq!(args[1], name);
+            assert!(!args.contains(&"--locked".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_run_command_reports_failure() {
+        assert!(run_command("definitely-not-a-real-binary-xyz", &[]).is_err());
+        // `false` always exits non-zero when available.
+        if is_tool_installed("false") {
+            assert!(run_command("false", &[]).is_err());
+        }
+    }
+
+    #[test]
+    fn test_run_command_success() {
+        if is_tool_installed("true") {
+            assert!(run_command("true", &[]).is_ok());
+        }
     }
 }

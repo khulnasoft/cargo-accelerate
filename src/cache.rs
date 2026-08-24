@@ -154,9 +154,7 @@ fn validate_remote_cache(show_values: bool) -> Result<()> {
         println!("  ✓ sccache executable: {}", "Available".green());
     } else {
         println!("  ✗ sccache executable: {}", "Not found".red());
-        println!(
-            "    Install with: cargo install sccache --features=dist-client"
-        );
+        println!("    Install with: cargo install sccache --features=dist-client");
         return Ok(());
     }
 
@@ -177,23 +175,44 @@ fn validate_remote_cache(show_values: bool) -> Result<()> {
 
     println!("\n  Environment:");
     match &endpoint {
-        Some(v) => println!("  ✓ SCCACHE_ENDPOINT = {}", display_env(v, show_values).green()),
+        Some(v) => println!(
+            "  ✓ SCCACHE_ENDPOINT = {}",
+            display_env(v, show_values).green()
+        ),
         None => println!("  ✗ SCCACHE_ENDPOINT = {}", "not set".red()),
     }
     match &bucket {
-        Some(v) => println!("  ✓ SCCACHE_BUCKET  = {}", display_env(v, show_values).green()),
-        None => println!("  ⚠ SCCACHE_BUCKET  = {}", "not set (may not be needed)".yellow()),
+        Some(v) => println!(
+            "  ✓ SCCACHE_BUCKET  = {}",
+            display_env(v, show_values).green()
+        ),
+        None => println!(
+            "  ⚠ SCCACHE_BUCKET  = {}",
+            "not set (may not be needed)".yellow()
+        ),
     }
     match &region {
-        Some(v) => println!("  ✓ SCCACHE_REGION  = {}", display_env(v, show_values).green()),
-        None => println!("  ⚠ SCCACHE_REGION  = {}", "not set (may not be needed)".yellow()),
+        Some(v) => println!(
+            "  ✓ SCCACHE_REGION  = {}",
+            display_env(v, show_values).green()
+        ),
+        None => println!(
+            "  ⚠ SCCACHE_REGION  = {}",
+            "not set (may not be needed)".yellow()
+        ),
     }
     match &dist_enabled {
         Some(v) if v == "true" || v == "1" => {
-            println!("  ✓ SCCACHE_DIST    = {}", display_env(v, show_values).green());
+            println!(
+                "  ✓ SCCACHE_DIST    = {}",
+                display_env(v, show_values).green()
+            );
         }
         Some(v) => {
-            println!("  ⚠ SCCACHE_DIST    = {}", display_env(v, show_values).yellow());
+            println!(
+                "  ⚠ SCCACHE_DIST    = {}",
+                display_env(v, show_values).yellow()
+            );
             println!("    Set SCCACHE_DIST=true to enable distributed caching.");
         }
         None => {
@@ -264,9 +283,7 @@ fn validate_remote_cache(show_values: bool) -> Result<()> {
             }
         }
     } else {
-        println!(
-            "  ⚠ Skipping connectivity test — SCCACHE_ENDPOINT not set."
-        );
+        println!("  ⚠ Skipping connectivity test — SCCACHE_ENDPOINT not set.");
     }
 
     // 4. Summary
@@ -278,15 +295,16 @@ fn validate_remote_cache(show_values: bool) -> Result<()> {
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
     if all_set {
-        println!("  {} Remote cache configuration looks complete.", "✔".green());
+        println!(
+            "  {} Remote cache configuration looks complete.",
+            "✔".green()
+        );
     } else if sccache_available {
         println!(
             "  {} sccache is available but remote cache is not fully configured.",
             "⚠".yellow()
         );
-        println!(
-            "    See: https://github.com/mozilla/sccache/blob/main/docs/dist.md"
-        );
+        println!("    See: https://github.com/mozilla/sccache/blob/main/docs/dist.md");
     } else {
         println!(
             "  {} sccache is not installed. Run `cargo accelerate install` first.",
@@ -561,7 +579,10 @@ mod tests {
             mask_value("https://user:password@cache.example.com:10500"),
             "https://***@cache.example.com:10500"
         );
-        assert_eq!(mask_value("https://cache.example.com:10500"), "https://cache.example.com:10500");
+        assert_eq!(
+            mask_value("https://cache.example.com:10500"),
+            "https://cache.example.com:10500"
+        );
         assert_eq!(mask_value("my-token-12345"), "***");
         assert_eq!(mask_value("super_secret_api_key_123"), "***");
         assert_eq!(mask_value("plain-value"), "plain-value");
@@ -570,8 +591,14 @@ mod tests {
     #[test]
     fn test_display_env_hides_values_by_default() {
         assert_eq!(display_env("http://test-server:10500", false), "set");
-        assert_eq!(display_env("http://test-server:10500", true), "http://test-server:10500");
-        assert_eq!(display_env("http://user:pass@host", true), "http://***@host");
+        assert_eq!(
+            display_env("http://test-server:10500", true),
+            "http://test-server:10500"
+        );
+        assert_eq!(
+            display_env("http://user:pass@host", true),
+            "http://***@host"
+        );
     }
 
     #[test]

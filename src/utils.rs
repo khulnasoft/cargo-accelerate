@@ -40,12 +40,9 @@ pub fn get_cached_metadata_with_deps() -> Result<&'static cargo_metadata::Metada
 
 /// Returns workspace metadata for the given root, running `cargo metadata` in
 /// that directory and caching the result keyed by root path.
-pub fn get_cached_metadata_for_root(
-    root: &Path,
-) -> Result<&'static cargo_metadata::Metadata> {
-    static METADATA_BY_ROOT: OnceLock<
-        Mutex<HashMap<PathBuf, &'static cargo_metadata::Metadata>>,
-    > = OnceLock::new();
+pub fn get_cached_metadata_for_root(root: &Path) -> Result<&'static cargo_metadata::Metadata> {
+    static METADATA_BY_ROOT: OnceLock<Mutex<HashMap<PathBuf, &'static cargo_metadata::Metadata>>> =
+        OnceLock::new();
     let map = METADATA_BY_ROOT.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = map.lock().expect("metadata cache lock poisoned");
     let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
@@ -84,6 +81,24 @@ pub fn available_cpus() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
+}
+
+pub fn preferred_linker_for(os: &str) -> &'static str {
+    match os {
+        "linux" => "mold",
+        "macos" => "lld",
+        "windows" => "lld-link",
+        _ => "lld",
+    }
+}
+
+pub fn target_triple_for(os: &str) -> &'static str {
+    match os {
+        "linux" => "x86_64-unknown-linux-gnu",
+        "macos" => "x86_64-apple-darwin",
+        "windows" => "x86_64-pc-windows-msvc",
+        _ => "x86_64-unknown-linux-gnu",
+    }
 }
 
 #[cfg(test)]
@@ -165,5 +180,22 @@ mod tests {
     fn test_get_cargo_config_path_relative() {
         let path = get_cargo_config_path(Path::new("my-project"));
         assert_eq!(path, Path::new("my-project/.cargo/config.toml"));
+    }
+
+    #[test]
+    fn test_preferred_linker_for_known_oses() {
+        assert_eq!(preferred_linker_for("linux"), "mold");
+        assert_eq!(preferred_linker_for("macos"), "lld");
+        assert_eq!(preferred_linker_for("windows"), "lld-link");
+        assert_eq!(preferred_linker_for("freebsd"), "lld");
+        assert_eq!(preferred_linker_for(""), "lld");
+    }
+
+    #[test]
+    fn test_target_triple_for_known_oses() {
+        assert_eq!(target_triple_for("linux"), "x86_64-unknown-linux-gnu");
+        assert_eq!(target_triple_for("macos"), "x86_64-apple-darwin");
+        assert_eq!(target_triple_for("windows"), "x86_64-pc-windows-msvc");
+        assert_eq!(target_triple_for("freebsd"), "x86_64-unknown-linux-gnu");
     }
 }

@@ -17,7 +17,10 @@ struct BenchmarkStats {
 pub fn run(incremental: bool) -> Result<()> {
     println!("{}", "Initiating Performance Benchmark...".bold().cyan());
     if incremental {
-        println!("  {}", "Incremental mode: measuring rebuild times without cargo clean".yellow());
+        println!(
+            "  {}",
+            "Incremental mode: measuring rebuild times without cargo clean".yellow()
+        );
     }
 
     let root = get_project_root().context("Could not find project root")?;
@@ -157,20 +160,40 @@ fn run_benchmark_sequence(
 }
 
 fn record_benchmark_timings(store: &mut TimingStore, stats: &BenchmarkStats, phase: &str) {
-    timings::record_build_run(store, "check", stats.check_time, "benchmark", Some(&format!("{}-check", phase)));
-    timings::record_build_run(store, "build", stats.build_time, "benchmark", Some(&format!("{}-build", phase)));
-    timings::record_build_run(store, "test", stats.test_time, "benchmark", Some(&format!("{}-test", phase)));
-    timings::record_build_run(store, "clippy", stats.clippy_time, "benchmark", Some(&format!("{}-clippy", phase)));
+    timings::record_build_run(
+        store,
+        "check",
+        stats.check_time,
+        "benchmark",
+        Some(&format!("{}-check", phase)),
+    );
+    timings::record_build_run(
+        store,
+        "build",
+        stats.build_time,
+        "benchmark",
+        Some(&format!("{}-build", phase)),
+    );
+    timings::record_build_run(
+        store,
+        "test",
+        stats.test_time,
+        "benchmark",
+        Some(&format!("{}-test", phase)),
+    );
+    timings::record_build_run(
+        store,
+        "clippy",
+        stats.clippy_time,
+        "benchmark",
+        Some(&format!("{}-clippy", phase)),
+    );
 }
 
 fn print_comparison(label: &str, before: Duration, after: Duration) {
     let before_secs = before.as_secs_f64();
     let after_secs = after.as_secs_f64();
-    let saved = if before_secs > 0.0 {
-        ((before_secs - after_secs) / before_secs) * 100.0
-    } else {
-        0.0
-    };
+    let saved = saved_pct(before_secs, after_secs);
 
     println!(
         "{}:  {:.2}s  ➔  {:.2}s   ({:.1}% Saved)",
@@ -179,6 +202,14 @@ fn print_comparison(label: &str, before: Duration, after: Duration) {
         format!("{:.2}s", after_secs).green(),
         saved
     );
+}
+
+fn saved_pct(before_secs: f64, after_secs: f64) -> f64 {
+    if before_secs > 0.0 {
+        ((before_secs - after_secs) / before_secs) * 100.0
+    } else {
+        0.0
+    }
 }
 
 fn run_cargo_clean(root: &Path) -> Result<()> {
@@ -299,23 +330,13 @@ fn setup_optimized_configs(cargo_toml_path: &Path, cargo_config_path: &Path) -> 
     }
 
     let os = crate::utils::get_os();
-    let preferred_linker = match os {
-        "linux" => "mold",
-        "macos" => "lld",
-        "windows" => "lld-link",
-        _ => "lld",
-    };
+    let preferred_linker = crate::utils::preferred_linker_for(os);
 
     if crate::utils::is_tool_installed(preferred_linker) {
         if !config_doc.contains_key("target") {
             config_doc["target"] = toml_edit::table();
         }
-        let target_key = match os {
-            "linux" => "x86_64-unknown-linux-gnu",
-            "macos" => "x86_64-apple-darwin",
-            "windows" => "x86_64-pc-windows-msvc",
-            _ => "x86_64-unknown-linux-gnu",
-        };
+        let target_key = crate::utils::target_triple_for(os);
         if config_doc["target"].get(target_key).is_none() {
             config_doc["target"][target_key] = toml_edit::table();
         }
@@ -389,4 +410,149 @@ fn run_cargo_cmd(root: &Path, cmd: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    fn stats(check_ms: u64) -> BenchmarkStats {
+        BenchmarkStats {
+            check_time: Duration::from_millis(check_ms),
+            build_time: Duration::from_millis(check_ms * 2),
+            test_time: Duration::from_millis(check_ms * 3),
+            clippy_time: Duration::from_millis(check_ms * 4),
+        }
+    }
+
+    #[test]
+    fn test_saved_pct_math() {
+        assert_eq!(saved_pct(10.0, 5.0), 50.0);
+        assert_eq!(saved_pct(10.0, 10.0), 0.0);
+        assert_eq!(saved_pct(10.0, 20.0), -100.0);
+        // Zero baseline must not divide by zero
+        assert_eq!(saved_pct(0.0, 5.0), 0.0);
+        assert!((saved_pct(8.0, 6.0) - 25.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_record_benchmark_timings_labels_each_phase() {
+        let mut store = TimingStore::default();
+        record_benchmark_timings(&mut store, &stats(100), "before");
+
+        assert_eq!(store.runs.len(), 4);
+        let labels: Vec<Option<&str>> = store.runs.iter().map(|r| r.label.as_deref()).collect();
+        assert!(labels.contains(&Some("before-check")));
+        assert!(labels.contains(&Some("before-build")));
+        assert!(labels.contains(&Some("before-test")));
+        assert!(labels.contains(&Some("before-clippy")));
+
+        for r in &store.runs {
+            assert_eq!(r.profile, "benchmark");
+        }
+
+        record_benchmark_timings(&mut store, &stats(200), "after");
+        assert_eq!(store.runs.len(), 8);
+        assert!(store
+            .runs
+            .iter()
+            .any(|r| r.label.as_deref() == Some("after-build")));
+    }
+
+    #[test]
+    fn test_setup_unoptimized_configs_missing_files_is_noop() {
+        let dir = TempDir::new().unwrap();
+        let toml = dir.path().join("Cargo.toml");
+        let config = dir.path().join("config.toml");
+
+        assert!(setup_unoptimized_configs(&toml, &config).is_ok());
+        assert!(!toml.exists());
+        assert!(!config.exists());
+    }
+
+    #[test]
+    fn test_setup_unoptimized_configs_strips_wrapper_and_sets_slow_profile() {
+        let dir = TempDir::new().unwrap();
+        let toml = dir.path().join("Cargo.toml");
+        let config = dir.path().join("config.toml");
+
+        fs::write(
+            &toml,
+            "[package]\nname = \"x\"\n# keep me\n[profile.dev]\nopt-level = 3\n",
+        )
+        .unwrap();
+        fs::write(
+            &config,
+            "[build]\nrustc-wrapper = \"sccache\"\n\n[target.x86_64-unknown-linux-gnu]\nlinker = \"clang\"\nrustflags = [\"-C\", \"link-arg=-fuse-ld=mold\"]\n",
+        )
+        .unwrap();
+
+        setup_unoptimized_configs(&toml, &config).unwrap();
+
+        let toml_out = fs::read_to_string(&toml).unwrap();
+        assert!(toml_out.contains("# keep me"), "comments must survive");
+        assert!(toml_out.contains("incremental = false"));
+        assert!(toml_out.contains("codegen-units = 1"));
+        // Existing keys are preserved (not clobbered)
+        assert!(toml_out.contains("opt-level = 3"));
+
+        let config_out = fs::read_to_string(&config).unwrap();
+        assert!(!config_out.contains("rustc-wrapper"));
+        assert!(!config_out.contains("linker"));
+        assert!(!config_out.contains("rustflags"));
+        assert!(!config_out.contains("target"));
+        assert!(config_out.contains("[build]") || !config_out.contains("[build]\nrustc-wrapper"));
+    }
+
+    #[test]
+    fn test_setup_optimized_configs_writes_fast_dev_profile() {
+        let dir = TempDir::new().unwrap();
+        let toml = dir.path().join("Cargo.toml");
+        let config = dir.path().join("config.toml");
+        fs::write(&toml, "[package]\nname = \"x\"\n").unwrap();
+
+        setup_optimized_configs(&toml, &config).unwrap();
+
+        let toml_out = fs::read_to_string(&toml).unwrap();
+        assert!(toml_out.contains("incremental = true"));
+        assert!(toml_out.contains("codegen-units = 256"));
+        assert!(toml_out.contains("opt-level = 0"));
+        assert!(toml_out.contains("debug = 1"));
+
+        let config_out = fs::read_to_string(&config).unwrap();
+        // Wrapper/linker presence depends on the tools installed in the
+        // environment; mirror the same condition the code uses.
+        if crate::utils::is_tool_installed("sccache") {
+            assert!(config_out.contains("rustc-wrapper = \"sccache\""));
+        } else {
+            assert!(!config_out.contains("rustc-wrapper"));
+        }
+        let linker = crate::utils::preferred_linker_for(crate::utils::get_os());
+        if crate::utils::is_tool_installed(linker) {
+            assert!(config_out.contains(&format!("fuse-ld={}", linker)));
+        } else {
+            assert!(!config_out.contains("rustflags"));
+        }
+    }
+
+    #[test]
+    fn test_setup_optimized_configs_preserves_existing_config_keys() {
+        let dir = TempDir::new().unwrap();
+        let toml = dir.path().join("Cargo.toml");
+        let config = dir.path().join("config.toml");
+        fs::write(&toml, "[package]\nname = \"x\"\n").unwrap();
+        fs::write(
+            &config,
+            "[build]\njobs = 8\n[target.'cfg(unix)']\nrustflags = [\"-Dwarnings\"]\n",
+        )
+        .unwrap();
+
+        setup_optimized_configs(&toml, &config).unwrap();
+
+        let out = fs::read_to_string(&config).unwrap();
+        assert!(out.contains("jobs = 8"), "existing build keys preserved");
+        assert!(out.contains("cfg(unix)"), "unrelated target entries kept");
+    }
 }

@@ -93,7 +93,7 @@ fn warm_cache_preload(root: &PathBuf) {
 
     // Build high-impact targets to warm the cache: workspace check + key deps
     let status = Command::new("cargo")
-        .args(&["check", "--workspace"])
+        .args(["check", "--workspace"])
         .current_dir(root)
         .stdout(Stdio::null())
         .stderr(Stdio::null())

@@ -47,32 +47,9 @@ pub fn run() -> Result<()> {
         get_transitive_deps(&package.id, &adjacency_list, &mut transitives);
         let transitive_count = transitives.len().saturating_sub(1);
 
-        // Estimate compile footprint based on crate complexity and common crates
-        let base_weight = match name.as_str() {
-            "syn" => 14.5,
-            "tokio" => 12.0,
-            "regex" => 8.5,
-            "serde" => 4.2,
-            "serde_derive" => 5.8,
-            "clap" => 7.5,
-            "clap_builder" => 6.2,
-            "hyper" => 9.5,
-            "reqwest" => 11.0,
-            "rand" => 3.8,
-            "serde_json" => 3.2,
-            "chrono" => 4.5,
-            "axum" => 8.0,
-            "diesel" => 13.0,
-            "sqlx" => 15.0,
-            _ => {
-                // Heuristic for unknown crates
-                let features_count = package.features.len() as f64;
-                0.8 + (features_count * 0.1)
-            }
-        };
-
         // Total estimated compile time takes into account the transitives compile cost too
-        let estimated_time = base_weight + (transitives.len() as f64 * 0.15);
+        let estimated_time =
+            base_weight_estimate(name, package.features.len()) + (transitives.len() as f64 * 0.15);
 
         metrics.push(DepMetrics {
             name: name.to_string(),
@@ -99,8 +76,7 @@ pub fn run() -> Result<()> {
     );
 
     let max_display = std::cmp::min(20, metrics.len());
-    for i in 0..max_display {
-        let m = &metrics[i];
+    for m in metrics.iter().take(max_display) {
         let name_colored = if m.estimated_time > 8.0 {
             m.name.red()
         } else if m.estimated_time > 3.0 {
@@ -152,5 +128,119 @@ fn get_transitive_deps<'a>(
         for dep in *deps {
             get_transitive_deps(&dep.pkg, adjacency_list, visited);
         }
+    }
+}
+
+/// Estimate compile footprint (seconds) based on crate complexity and known
+/// heavyweights; unknown crates fall back to a feature-count heuristic.
+fn base_weight_estimate(name: &str, features_count: usize) -> f64 {
+    match name {
+        "syn" => 14.5,
+        "tokio" => 12.0,
+        "regex" => 8.5,
+        "serde" => 4.2,
+        "serde_derive" => 5.8,
+        "clap" => 7.5,
+        "clap_builder" => 6.2,
+        "hyper" => 9.5,
+        "reqwest" => 11.0,
+        "rand" => 3.8,
+        "serde_json" => 3.2,
+        "chrono" => 4.5,
+        "axum" => 8.0,
+        "diesel" => 13.0,
+        "sqlx" => 15.0,
+        // Heuristic for unknown crates
+        _ => 0.8 + (features_count as f64 * 0.1),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cargo_metadata::PackageId;
+
+    fn pid(s: &str) -> PackageId {
+        PackageId {
+            repr: s.to_string(),
+        }
+    }
+
+    fn dep(name: &str) -> NodeDep {
+        // NodeDep is #[non_exhaustive], so build it via deserialization.
+        serde_json::from_value(serde_json::json!({ "name": name, "pkg": name })).unwrap()
+    }
+
+    /// Build an adjacency list from `(node, [deps])` tuples.
+    fn graph(edges: &[(&str, Vec<&str>)]) -> HashMap<PackageId, Vec<NodeDep>> {
+        let mut map = HashMap::new();
+        for (name, deps) in edges {
+            let nodes = deps.iter().map(|d| dep(d)).collect::<Vec<_>>();
+            map.insert(pid(name), nodes);
+        }
+        map
+    }
+
+    fn collect(graph: &HashMap<PackageId, Vec<NodeDep>>, start: &str) -> HashSet<String> {
+        let adjacency: HashMap<&PackageId, &Vec<NodeDep>> = graph.iter().collect();
+        let mut visited = HashSet::new();
+        let start = pid(start);
+        get_transitive_deps(&start, &adjacency, &mut visited);
+        visited.into_iter().map(|p| p.repr.clone()).collect()
+    }
+
+    #[test]
+    fn test_transitive_chain() {
+        // a -> b -> c
+        let g = graph(&[("a", vec!["b"]), ("b", vec!["c"]), ("c", vec![])]);
+        let seen = collect(&g, "a");
+        assert_eq!(seen.len(), 3);
+        assert!(seen.contains("a") && seen.contains("b") && seen.contains("c"));
+    }
+
+    #[test]
+    fn test_transitive_diamond_deduplicates() {
+        // a -> b, a -> c, b -> d, c -> d : d must be counted once
+        let g = graph(&[
+            ("a", vec!["b", "c"]),
+            ("b", vec!["d"]),
+            ("c", vec!["d"]),
+            ("d", vec![]),
+        ]);
+        assert_eq!(collect(&g, "a").len(), 4);
+    }
+
+    #[test]
+    fn test_transitive_cycle_terminates() {
+        // a <-> b cycle plus c hanging off b
+        let g = graph(&[("a", vec!["b"]), ("b", vec!["a", "c"]), ("c", vec![])]);
+        assert_eq!(collect(&g, "a").len(), 3);
+    }
+
+    #[test]
+    fn test_transitive_self_loop_and_leaf() {
+        let g = graph(&[("solo", vec![]), ("selfy", vec!["selfy"])]);
+        assert_eq!(collect(&g, "solo").len(), 1);
+        assert_eq!(collect(&g, "selfy").len(), 1);
+    }
+
+    #[test]
+    fn test_transitive_missing_node_is_empty() {
+        let g = graph(&[("a", vec![])]);
+        assert_eq!(collect(&g, "not-in-graph").len(), 1);
+    }
+
+    #[test]
+    fn test_base_weight_known_heavyweights() {
+        assert_eq!(base_weight_estimate("syn", 0), 14.5);
+        assert_eq!(base_weight_estimate("sqlx", 99), 15.0);
+        assert_eq!(base_weight_estimate("tokio", 0), 12.0);
+        assert_eq!(base_weight_estimate("serde_json", 5), 3.2);
+    }
+
+    #[test]
+    fn test_base_weight_unknown_uses_feature_heuristic() {
+        assert_eq!(base_weight_estimate("obscure-crate", 0), 0.8);
+        assert_eq!(base_weight_estimate("obscure-crate", 10), 1.8);
     }
 }
