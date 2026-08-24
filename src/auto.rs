@@ -14,6 +14,40 @@ pub struct AutoConfig {
     pub non_interactive: bool,
 }
 
+#[derive(Debug)]
+enum Step {
+    Doctor,
+    Cache,
+    Linker,
+    Profile,
+    Ci,
+    Policy,
+}
+
+impl Step {
+    fn all() -> [(Step, &'static str); 6] {
+        [
+            (Step::Doctor, "Doctor — System Health Check"),
+            (Step::Cache, "Cache — sccache Configuration"),
+            (Step::Linker, "Linker — Fast Linker Setup"),
+            (Step::Profile, "Profile — Scenario Tuning"),
+            (Step::Ci, "CI — Workflow Generation"),
+            (Step::Policy, "Policy — Build Enforcement"),
+        ]
+    }
+
+    fn is_skipped(&self, config: &AutoConfig) -> bool {
+        match self {
+            Step::Cache => config.skip_cache,
+            Step::Linker => config.skip_linker,
+            Step::Profile => config.skip_profile,
+            Step::Ci => config.skip_ci,
+            Step::Policy => config.skip_policy,
+            Step::Doctor => false,
+        }
+    }
+}
+
 pub fn run(config: AutoConfig) -> Result<()> {
     println!(
         "{}",
@@ -31,37 +65,10 @@ pub fn run(config: AutoConfig) -> Result<()> {
 
     let _root = get_project_root().context("Could not find project root")?;
 
-    enum Step {
-        Doctor,
-        Cache,
-        Linker,
-        Profile,
-        Ci,
-        Policy,
-    }
-
-    let steps = [
-        (Step::Doctor, "Doctor — System Health Check"),
-        (Step::Cache, "Cache — sccache Configuration"),
-        (Step::Linker, "Linker — Fast Linker Setup"),
-        (Step::Profile, "Profile — Scenario Tuning"),
-        (Step::Ci, "CI — Workflow Generation"),
-        (Step::Policy, "Policy — Build Enforcement"),
-    ];
-
-    for (i, (step_kind, name)) in steps.iter().enumerate() {
+    for (i, (step_kind, name)) in Step::all().iter().enumerate() {
         let step_num = i + 1;
 
-        let skipped = match step_kind {
-            Step::Cache if config.skip_cache => true,
-            Step::Linker if config.skip_linker => true,
-            Step::Profile if config.skip_profile => true,
-            Step::Ci if config.skip_ci => true,
-            Step::Policy if config.skip_policy => true,
-            _ => false,
-        };
-
-        if skipped {
+        if step_kind.is_skipped(&config) {
             println!(
                 "{} {}. {} {}",
                 "⏭".yellow().bold(),
@@ -283,5 +290,58 @@ mod tests {
     #[test]
     fn test_prompt_default_no() {
         assert!(!prompt_user("test", false));
+    }
+
+    #[test]
+    fn test_step_list_has_six_ordered_steps() {
+        let steps = Step::all();
+        assert_eq!(steps.len(), 6);
+        let names: Vec<&str> = steps.iter().map(|(_, n)| *n).collect();
+        assert!(names[0].starts_with("Doctor"));
+        assert!(names[5].starts_with("Policy"));
+        // No duplicate step names
+        for (i, name) in names.iter().enumerate() {
+            assert!(!names[..i].contains(name), "duplicate step: {name}");
+        }
+    }
+
+    #[test]
+    fn test_default_config_skips_nothing() {
+        let config = AutoConfig::default();
+        for (step, _) in Step::all() {
+            assert!(
+                !step.is_skipped(&config),
+                "{step:?} must not skip by default"
+            );
+        }
+    }
+
+    #[test]
+    fn test_each_skip_flag_only_affects_its_step() {
+        let config = AutoConfig {
+            skip_cache: true,
+            ..AutoConfig::default()
+        };
+        let skipped: Vec<bool> = Step::all()
+            .iter()
+            .map(|(s, _)| s.is_skipped(&config))
+            .collect();
+        assert_eq!(
+            skipped,
+            vec![false, true, false, false, false, false],
+            "only the Cache step should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_apply_flags_do_not_influence_skipping() {
+        let config = AutoConfig {
+            apply: true,
+            non_interactive: true,
+            ..AutoConfig::default()
+        };
+        for (step, _) in Step::all() {
+            assert!(!step.is_skipped(&config));
+        }
     }
 }

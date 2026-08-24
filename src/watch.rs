@@ -46,13 +46,7 @@ pub fn run() -> Result<()> {
     println!("  Watching for file changes... (Press Ctrl+C to stop)\n");
 
     let status = Command::new("cargo")
-        .args([
-            "watch",
-            "-q",
-            "-c",
-            "-s",
-            "cargo check && cargo test && cargo clippy",
-        ])
+        .args(pipeline_args())
         .spawn()
         .context("Failed to run cargo watch")?
         .wait()?;
@@ -62,4 +56,33 @@ pub fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Arguments passed to `cargo watch`: quiet, clear, running the
+/// check → test → clippy pipeline on every change.
+fn pipeline_args() -> [&'static str; 5] {
+    [
+        "watch",
+        "-q",
+        "-c",
+        "-s",
+        "cargo check && cargo test && cargo clippy",
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pipeline_args_shape() {
+        let args = pipeline_args();
+        assert_eq!(args[0], "watch");
+        assert!(args.contains(&"-q"));
+        assert!(args.contains(&"-c"));
+        assert_eq!(
+            *args.last().unwrap(),
+            "cargo check && cargo test && cargo clippy"
+        );
+    }
 }

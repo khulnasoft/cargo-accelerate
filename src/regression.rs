@@ -162,19 +162,15 @@ fn compare_with_baseline(
     let mut regression_found = false;
 
     for (label, base_val, curr_val) in &comparisons {
-        let pct_change = if *base_val > 0.0 {
-            ((curr_val - base_val) / base_val) * 100.0
-        } else {
-            0.0
-        };
+        let pct_change = pct_change(*base_val, *curr_val);
 
-        let change_str = if pct_change > options.threshold_pct {
-            regression_found = true;
-            format!("+{:.1}% ⚠", pct_change).red().to_string()
-        } else if pct_change < -options.threshold_pct {
-            format!("{:.1}% ✔", pct_change).green().to_string()
-        } else {
-            format!("{:.1}%", pct_change).dimmed().to_string()
+        let change_str = match classify_change(pct_change, options.threshold_pct) {
+            ChangeVerdict::Regression => {
+                regression_found = true;
+                format!("+{:.1}% ⚠", pct_change).red().to_string()
+            }
+            ChangeVerdict::Improved => format!("{:.1}% ✔", pct_change).green().to_string(),
+            ChangeVerdict::Stable => format!("{:.1}%", pct_change).dimmed().to_string(),
         };
 
         println!(
@@ -231,6 +227,32 @@ fn measure_current_builds(root: &Path) -> Result<BuildBaseline> {
     })
 }
 
+/// Percentage change from baseline to current; 0.0 when baseline is
+/// non-positive to avoid division by zero.
+fn pct_change(base_val: f64, curr_val: f64) -> f64 {
+    if base_val > 0.0 {
+        ((curr_val - base_val) / base_val) * 100.0
+    } else {
+        0.0
+    }
+}
+
+enum ChangeVerdict {
+    Regression,
+    Improved,
+    Stable,
+}
+
+fn classify_change(pct_change: f64, threshold_pct: f64) -> ChangeVerdict {
+    if pct_change > threshold_pct {
+        ChangeVerdict::Regression
+    } else if pct_change < -threshold_pct {
+        ChangeVerdict::Improved
+    } else {
+        ChangeVerdict::Stable
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +291,35 @@ mod tests {
         let current2 = 10.5; // 5% increase, within threshold
         let pct2 = ((current2 - base) / base) * 100.0;
         assert!(pct2 < 10.0);
+    }
+
+    #[test]
+    fn test_pct_change_math() {
+        assert!((pct_change(10.0, 12.0) - 20.0).abs() < 1e-6);
+        assert!((pct_change(10.0, 5.0) + 50.0).abs() < 1e-6);
+        assert_eq!(pct_change(10.0, 10.0), 0.0);
+        // Non-positive baseline must not divide by zero
+        assert_eq!(pct_change(0.0, 5.0), 0.0);
+        assert_eq!(pct_change(-1.0, 5.0), 0.0);
+    }
+
+    #[test]
+    fn test_classify_change_verdicts() {
+        // Strictly beyond threshold flags regression / improvement
+        assert!(matches!(
+            classify_change(15.0, 10.0),
+            ChangeVerdict::Regression
+        ));
+        assert!(matches!(
+            classify_change(-15.0, 10.0),
+            ChangeVerdict::Improved
+        ));
+        assert!(matches!(classify_change(5.0, 10.0), ChangeVerdict::Stable));
+        // Boundary values are stable (comparison is strict)
+        assert!(matches!(classify_change(10.0, 10.0), ChangeVerdict::Stable));
+        assert!(matches!(
+            classify_change(-10.0, 10.0),
+            ChangeVerdict::Stable
+        ));
     }
 }

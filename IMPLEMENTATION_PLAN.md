@@ -116,13 +116,32 @@ Target: every module ≥70% line coverage. Testable-without-cargo logic extracte
 
 ## 5. Tracking
 
-| Metric | Now | Phase 2 Exit | Phase 3 Exit | Phase 4 Exit |
+| Metric | Baseline | Now | Phase 3 Exit | Phase 4 Exit |
 |---|---|---|---|---|
-| Modules w/ zero tests | 5 | **4** (main covered via integration tests) | 0 | 0 |
-| Unit tests | 196 | **209** ✅ | ~280 | ~320 |
+| Modules w/ zero tests | 5 | **0** ✅ | 0 | 0 |
+| Unit tests | 196 | **235** ✅ (+4 integration = 239) | ~280 | ~320 |
 | Integration tests | 0 | **4** ✅ | 6+ | 8+ |
-| Line coverage (measured) | TBD (P1.3) | baseline | ≥70% all modules | ≥80% overall |
+| Line coverage (llvm-cov) | 54.20% | **58.87%** ✅ | ≥70% all modules | ≥80% overall |
 | Build warnings | 1 | **0** ✅ | 0 | 0 |
+
+### Measured per-module line coverage (cargo llvm-cov)
+
+| Module | Baseline | Now | Δ |
+|---|---|---|---|
+| benchmark.rs | 0.00% | 53.56% | +53.6 |
+| dependencies.rs | 0.00% | 60.00% | +60.0 |
+| installer.rs | 0.00% | 34.09% | +34.1 |
+| watch.rs | 0.00% | 28.33% | +28.3 |
+| auto.rs | 20.40% | 40.08% | +19.7 |
+| regression.rs | 19.58% | 30.70% | +11.1 |
+| utils.rs | 81.20% | 84.72% | +3.5 |
+| cli.rs | 92.20% | 92.20% | — |
+| timings.rs | 84.52% | 84.52% | — |
+| **TOTAL** | **54.20%** | **58.87%** | **+4.7** |
+
+Remaining low-coverage areas are `run()` entry points that shell out to cargo
+(benchmark/measure_builds, installer/run, watch/run, daemon) — best covered by
+fixture-workspace integration tests in Phase 3 follow-up.
 
 ### Progress Log
 
@@ -138,5 +157,26 @@ Target: every module ≥70% line coverage. Testable-without-cargo logic extracte
     `avg_duration_ms`) with filters `--since` (7d/24h/90m or unix ts), `--branch`, `--profile`,
     `--label`; dead-code warning eliminated. Median now interpolates for even-length samples.
   - Remaining: P1.3 coverage baseline (needs one CI run or local `cargo llvm-cov` install), Phase 3 modules
+
+- **2026-08-23 — P1.3 + Phase 3 (P3.1–P3.5) executed:**
+  - Installed cargo-llvm-cov locally; baseline measured at **54.20%** lines before new tests
+  - benchmark.rs: extracted `saved_pct`; tests for config rewrite (comment preservation,
+    sccache/linker stripping, optimized profile keys, existing-key preservation) and
+    benchmark timing labels — 0% → **53.6%**
+  - dependencies.rs: extracted `base_weight_estimate`; tests for transitive graph traversal
+    (chain, diamond dedup, cycles, self-loops, missing nodes) and weight heuristics —
+    0% → **60.0%**
+  - installer.rs: extracted pure `install_args` (nextest `--locked` special case) +
+    process-failure tests; reused shared `preferred_linker_for` from utils — 0% → **34.1%**
+  - watch.rs: extracted `pipeline_args`; shape test — 0% → **28.3%**
+  - auto.rs: hoisted `Step` enum, added `is_skipped`; step-order/skip-flag isolation tests —
+    20.4% → **40.1%**
+  - regression.rs: extracted `pct_change` + `classify_change` (boundary semantics: strict
+    comparisons); verdict + division-guard tests — 19.6% → **30.7%**
+  - utils.rs: consolidated duplicated OS→linker/triple mappings into shared helpers with
+    tests; 81.2% → **84.7%**
+  - After: **58.87%** overall (+4.7 pts), 239 tests, all gates green (clippy -D warnings, fmt)
+  - Remaining: Phase 3 follow-up (fixture-workspace integration tests for run() entry
+    points in benchmark/installer/watch/daemon), then Phase 4 (--dry-run, snapshot/property tests)
 
 Suggested labels for tracking: `coverage`, `tech-debt`, `phase-1`…`phase-4`.
